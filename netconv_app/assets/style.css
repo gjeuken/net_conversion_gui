@@ -1,0 +1,11 @@
+/* Minor polish for the workbench tool. */
+.dash-table-container { font-size: 13px; }
+
+.tab-content { padding-top: 1rem; }
+
+h5 { margin-top: 0.5rem; }
+
+footer { border-top: 1px solid #eee; padding-top: 0.5rem; }
+
+/* Make the balance status colours readable. */
+.dash-spreadsheet td { white-space: normal !important; }

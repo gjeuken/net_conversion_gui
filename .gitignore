@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# App runtime caches
+netconv_app/.cache/
+.diskcache/
+cache/
+
+# OS / editor
+.DS_Store
+*.swp
+
+# Local Claude Code settings
+.claude/
