@@ -79,10 +79,11 @@ def load_example(filename):
 # --------------------------------------------------------------------------- #
 # Layout
 # --------------------------------------------------------------------------- #
-def _table(table_id, columns, editable=True):
+def _table(table_id, columns, editable=True, data=None):
     return dash_table.DataTable(
         id=table_id,
         columns=[{"name": c, "id": c} for c in columns],
+        data=data or [],
         editable=editable,
         row_deletable=editable,
         page_size=50,
@@ -95,6 +96,11 @@ def _table(table_id, columns, editable=True):
 
 
 def workbench_tab():
+    # Seed the tables with the default example directly in the layout so they
+    # are never empty on first paint.  (A DataTable mounted with no data can
+    # render blank until a reflow — e.g. switching tabs — forces a redraw.)
+    df_met0, df_rxn0, _cfg0 = load_example("Example1_EMP_lactate.xlsx")
+    met0, rxn0 = df_to_records(df_met0), df_to_records(df_rxn0)
     return dbc.Container([
         dbc.Row([
             dbc.Col([
@@ -127,13 +133,13 @@ def workbench_tab():
                 html.H5("Reactions"),
                 dbc.Button("+ Add reaction row", id="btn-add-rxn", size="sm",
                            color="light", className="mb-1"),
-                _table("table-reactions", io.REACTION_COLS),
+                _table("table-reactions", io.REACTION_COLS, data=rxn0),
             ], md=7),
             dbc.Col([
                 html.H5("Metabolites"),
                 dbc.Button("+ Add metabolite row", id="btn-add-met", size="sm",
                            color="light", className="mb-1"),
-                _table("table-metabolites", io.METABOLITE_COLS),
+                _table("table-metabolites", io.METABOLITE_COLS, data=met0),
             ], md=5),
         ], className="mb-3"),
 
@@ -263,12 +269,12 @@ app.layout = dbc.Container([
            "elementary flux modes, and compute net-conversion ΔG°′/ΔGm′ and the "
            "Ω measure (kJ/mol).", className="text-muted"),
     dbc.Tabs([
-        dbc.Tab(workbench_tab(), label="① Workbench"),
-        dbc.Tab(fba_tab(), label="② Model & FBA"),
-        dbc.Tab(efm_tab(), label="③ EFMs"),
-        dbc.Tab(thermo_tab(), label="④ Net conversions & ΔG"),
-        dbc.Tab(downloads_tab(), label="⑤ Downloads"),
-    ]),
+        dbc.Tab(workbench_tab(), label="① Workbench", tab_id="tab-workbench"),
+        dbc.Tab(fba_tab(), label="② Model & FBA", tab_id="tab-fba"),
+        dbc.Tab(efm_tab(), label="③ EFMs", tab_id="tab-efm"),
+        dbc.Tab(thermo_tab(), label="④ Net conversions & ΔG", tab_id="tab-thermo"),
+        dbc.Tab(downloads_tab(), label="⑤ Downloads", tab_id="tab-downloads"),
+    ], id="main-tabs", active_tab="tab-workbench"),
     html.Footer(html.Small(_startup_banner()), className="text-muted my-3"),
 ], fluid=True)
 
