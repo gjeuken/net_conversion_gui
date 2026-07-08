@@ -21,7 +21,7 @@ import pandas as pd
 from dash import (Dash, Input, Output, State, ctx, dash_table, dcc, html,
                   no_update)
 
-from pipeline import bigg, io, kegg, run
+from pipeline import bigg, exchanges, io, kegg, run
 
 app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY],
            title="KEGG workbook builder")
@@ -112,6 +112,23 @@ app.layout = dbc.Container([
             _table("tbl-met", io.METABOLITE_COLS),
         ], md=5),
     ], className="mb-3"),
+
+    dbc.Card(dbc.CardBody([
+        html.H5("1c · Exchange & transport reactions"),
+        html.P("Pick the metabolites that cross the system boundary. For each, "
+               "the app adds an extracellular counterpart, a transport reaction "
+               "(X ⇌ Xex) and an exchange reaction (EXX). Direction stays a "
+               "modelling choice — everything is created reversible; set "
+               "substrates/products later in the analysis app.",
+               className="text-muted small"),
+        dcc.Dropdown(id="exchange-mets", multi=True, className="mb-2",
+                     placeholder="Select boundary metabolites…"),
+        dbc.Button("Add exchange + transport reactions", id="btn-exchange",
+                   color="secondary", outline=True),
+        html.Div(id="exchange-messages",
+                 style={"fontSize": "12px", "fontFamily": "monospace",
+                        "marginTop": "0.5rem"}),
+    ]), className="mb-3"),
 
     html.Hr(),
     html.H5("2 · Live balance check"),
@@ -252,6 +269,45 @@ def translate_bigg(_n, met_data, rxn_data):
         for x in flags]) if flags else None
     return (df_to_records(m2), df_to_records(r2),
             html.Div([summary, detail] if detail else [summary]))
+
+
+@app.callback(
+    Output("exchange-mets", "options"),
+    Input("tbl-met", "data"),
+    Input("tbl-rxn", "data"),
+)
+def update_exchange_options(met_data, rxn_data):
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    have_ex = {str(r)[2:] for r in df_rxn["ID"].dropna().astype(str)
+               if str(r).startswith("EX")}
+    opts = []
+    for mid in df_met["ID"].dropna().astype(str):
+        mid = mid.strip()
+        if not mid or mid.endswith("ex") or mid in have_ex:
+            continue
+        opts.append({"label": mid, "value": mid})
+    return opts
+
+
+@app.callback(
+    Output("tbl-met", "data", allow_duplicate=True),
+    Output("tbl-rxn", "data", allow_duplicate=True),
+    Output("exchange-messages", "children"),
+    Input("btn-exchange", "n_clicks"),
+    State("exchange-mets", "value"),
+    State("tbl-met", "data"),
+    State("tbl-rxn", "data"),
+    prevent_initial_call=True,
+)
+def add_exchanges(_n, selected, met_data, rxn_data):
+    if not selected:
+        return no_update, no_update, "Select at least one boundary metabolite."
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    m2, r2, messages = exchanges.add_exchange_transport(df_met, df_rxn, selected)
+    msg = html.Ul([html.Li(m) for m in messages]) if messages else "Nothing added."
+    return df_to_records(m2), df_to_records(r2), msg
 
 
 @app.callback(

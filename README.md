@@ -81,6 +81,14 @@ namespace mismatch (e.g. fructose-6-P, whose BiGG entry references a different
 KEGG id). Those fall back to a slugified KEGG name and are **flagged** in the
 translation report so you can hand-edit them.
 
+**Boundary metabolites → exchange + transport.** KEGG has no compartments, so
+a modelled pathway needs boundary reactions. Pick the metabolites that cross
+the system boundary and the builder adds, for each `X`, an extracellular
+counterpart `Xex`, a transport reaction `TX` (`X ⇌ Xex`) and an exchange
+`EXX` (`Xex ⇌`) — the same convention as the paper's example workbooks.
+Everything is created reversible; direction (which are substrates vs products)
+stays a modelling choice you set later in the analysis app.
+
 ### Requirements
 
 * **Python 3.11+**
@@ -282,6 +290,7 @@ pipeline/                # shared core, imported by both apps
   io.py                  # canonical dataframes, Excel + config save/load
   kegg.py                # KEGG REST: reaction + compound fetch (formula/charge/name)
   bigg.py                # optional KEGG->BiGG id translation (readability)
+  exchanges.py           # auto-add exchange + transport reactions for boundary mets
   balance.py             # formula/charge parsing, atom + charge balance
   model.py               # COBRApy model, exchanges, FBA, pruning
   efm.py                 # S matrix, efmtool, rank check, normalisation
