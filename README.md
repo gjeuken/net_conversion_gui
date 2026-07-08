@@ -77,7 +77,13 @@ pipeline reads only these:
   working IDs using any arrow: `->`, `<=>`, `→`), `Reversibility` (1 = reversible,
   0 = irreversible).
 * **Metabolites** — `ID` (working abbreviation), `Name`, `KEGG ID` (e.g.
-  `C00031`).
+  `C00031`), and an optional `Chemical formula`. Balance checking normally pulls
+  each compound's formula/charge from KEGG, but a metabolite with **no KEGG ID**
+  (a designed or non-KEGG compound) can't be looked up — supply its
+  `Chemical formula` (e.g. `C4H8O2`) and the balance check uses that directly.
+  When present, an explicit formula overrides the KEGG lookup. (Charge defaults
+  to 0 for formula-only metabolites; add an optional `Charge` column if you need
+  a non-zero one.)
 
 You can populate them by any mix of:
 
@@ -183,6 +189,7 @@ Flags: `--no-thermo` skips eQuilibrator (and its first-run download);
 | `netconv_app/examples/Example1_EMP_lactate.xlsx` | EMP glycolysis → lactate (the default; reproduces the paper's headline net conversion) |
 | `netconv_app/examples/Example1_EMPglycolysis.xlsx` | EMP glycolysis → ethanol / acetate / formate |
 | `netconv_app/examples/pan_glycolysis.xlsx` | Pan-glycolysis (2 imports × EMP/ED × GAPDH/GAPN × 3 fermentation routes) — the 24-EFM stretch test |
+| `netconv_app/examples/BDO_production_pathways.xlsx` | 1,4-butanediol production pathways — demonstrates a non-KEGG metabolite (`H4BUAL`) balanced via an explicit `Chemical formula` |
 
 Regenerate them with:
 

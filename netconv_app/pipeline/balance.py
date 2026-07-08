@@ -125,7 +125,57 @@ def multiply_formula(counts: Counter, coeff: float) -> Counter:
     return Counter({atom: n * coeff for atom, n in counts.items()})
 
 
+# -------- User-supplied formulas/charges (for non-KEGG metabolites) --------
+def formula_overrides(mapping_df: pd.DataFrame):
+    """Pull explicit ``Chemical formula`` / ``Charge`` from the metabolite table.
+
+    Metabolites without a KEGG ID can't be looked up, but the user may supply a
+    ``Chemical formula`` column (and optionally ``Charge``) directly.  When
+    present, that value wins over the KEGG lookup — it's the escape hatch for
+    designed/non-KEGG compounds (CLAUDE.md §5, §8).
+
+    Returns ``(formula_map, charge_map)`` keyed by the id each metabolite carries
+    *after* mapping to KEGG — i.e. the KEGG ID when one exists, otherwise the
+    working ID (which is exactly what ``map_custom_to_kegg_equation`` falls back
+    to), so the keys line up with the equations passed to :func:`check_balance`.
+    """
+    formula_map, charge_map = {}, {}
+    has_formula = "Chemical formula" in mapping_df.columns
+    has_charge = "Charge" in mapping_df.columns
+    if not (has_formula or has_charge):
+        return formula_map, charge_map
+
+    for _, row in mapping_df.iterrows():
+        wid = row.get("ID")
+        kid = row.get("KEGG ID")
+        mapped = kid if isinstance(kid, str) and kid.strip() else wid
+        if not (isinstance(mapped, str) and mapped.strip()):
+            continue
+        mapped = mapped.strip()
+        if has_formula:
+            f = row.get("Chemical formula")
+            if isinstance(f, str) and f.strip():
+                formula_map[mapped] = f.strip()
+        if has_charge:
+            c = row.get("Charge")
+            if pd.notna(c) and str(c).strip() != "":
+                try:
+                    charge_map[mapped] = int(float(c))
+                except (ValueError, TypeError):
+                    pass
+    return formula_map, charge_map
+
+
 # -------- Clean mapping: custom IDs -> KEGG IDs by token --------
+def _clean_kegg(kid, fallback):
+    """A KEGG id, or ``fallback`` when it's missing/blank (NaN, None, "")."""
+    if kid is None or (isinstance(kid, float) and pd.isna(kid)):
+        return str(fallback)
+    if isinstance(kid, str) and not kid.strip():
+        return str(fallback)
+    return str(kid)
+
+
 def map_custom_to_kegg_equation(equation: str, mapping_df: pd.DataFrame):
     custom2kegg = dict(zip(mapping_df["ID"], mapping_df["KEGG ID"]))
     subs, prods = parse_equation(equation)
@@ -133,10 +183,8 @@ def map_custom_to_kegg_equation(equation: str, mapping_df: pd.DataFrame):
     def map_side(pairs):
         mapped = []
         for coeff, cid in pairs:
-            kid = custom2kegg.get(cid, cid)
-            if pd.isna(kid) or kid is None:
-                kid = cid
-            mapped.append((coeff, str(kid)))
+            kid = _clean_kegg(custom2kegg.get(cid, cid), cid)
+            mapped.append((coeff, kid))
         return mapped
 
     subs_k = map_side(subs)
@@ -205,6 +253,8 @@ def analyze_custom_equations(equations, mapping_df, reaction_ids=None):
     """
     from .kegg import get_compound_info  # lazy: avoid circular import
 
+    f_over, c_over = formula_overrides(mapping_df)
+
     rows = []
     for idx, eq in enumerate(equations):
         rid = reaction_ids[idx] if reaction_ids is not None else None
@@ -223,9 +273,10 @@ def analyze_custom_equations(equations, mapping_df, reaction_ids=None):
 
         cids = [cid for _, cid in subs_k + prods_k]
         uniq = list(dict.fromkeys(cids))
+        # KEGG lookup first, then let any user-supplied formula/charge win.
         compound_info = {cid: get_compound_info(cid) for cid in uniq}
-        formula_map = {cid: v[0] for cid, v in compound_info.items()}
-        charge_map = {cid: v[1] for cid, v in compound_info.items()}
+        formula_map = {cid: f_over.get(cid, v[0]) for cid, v in compound_info.items()}
+        charge_map = {cid: c_over.get(cid, v[1]) for cid, v in compound_info.items()}
 
         (atoms_bal, charge_bal, _la, _ra, left_charge, right_charge, delta,
          imbalance_summary) = check_balance(subs_k, prods_k, formula_map, charge_map)
@@ -283,6 +334,8 @@ def analyze_stoichiometry_matrix(stoich_df, mapping_df, formula_map=None,
     """
     from .kegg import get_compound_info  # lazy
 
+    f_over, c_over = formula_overrides(mapping_df)
+
     rows = []
     abbrev2kegg = dict(zip(mapping_df["ID"], mapping_df["KEGG ID"]))
 
@@ -294,13 +347,11 @@ def analyze_stoichiometry_matrix(stoich_df, mapping_df, formula_map=None,
             if abs(coeff) < tol:
                 continue
             abbrev = met_full[2:]
-            kegg_id = abbrev2kegg.get(abbrev, abbrev)
-            if pd.isna(kegg_id) or kegg_id is None:
-                kegg_id = abbrev
+            kegg_id = _clean_kegg(abbrev2kegg.get(abbrev, abbrev), abbrev)
             if coeff < 0:
-                substrates.append((-coeff, str(kegg_id)))
+                substrates.append((-coeff, kegg_id))
             else:
-                products.append((coeff, str(kegg_id)))
+                products.append((coeff, kegg_id))
 
         def side_to_str(pairs):
             parts = []
@@ -317,8 +368,8 @@ def analyze_stoichiometry_matrix(stoich_df, mapping_df, formula_map=None,
             cids = [cid for _, cid in substrates + products]
             uniq = list(dict.fromkeys(cids))
             compound_info = {cid: get_compound_info(cid) for cid in uniq}
-            f_map = {cid: v[0] for cid, v in compound_info.items()}
-            c_map = {cid: v[1] for cid, v in compound_info.items()}
+            f_map = {cid: f_over.get(cid, v[0]) for cid, v in compound_info.items()}
+            c_map = {cid: c_over.get(cid, v[1]) for cid, v in compound_info.items()}
         else:
             f_map, c_map = formula_map, charge_map
 

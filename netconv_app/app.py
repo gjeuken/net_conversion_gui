@@ -48,6 +48,7 @@ EXAMPLES = {
     "EMP glycolysis → lactate (default)": "Example1_EMP_lactate.xlsx",
     "EMP glycolysis → ethanol/acetate/formate": "Example1_EMPglycolysis.xlsx",
     "Pan-glycolysis (24 EFMs)": "pan_glycolysis.xlsx",
+    "1,4-butanediol production (non-KEGG metabolite)": "BDO_production_pathways.xlsx",
 }
 
 CURRENCY_KEGG = {"C00002": "ATP", "C00008": "ADP", "C00009": "Pi",

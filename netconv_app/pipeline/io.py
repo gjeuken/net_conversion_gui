@@ -2,9 +2,13 @@
 
 The two canonical dataframes (CLAUDE.md §5) are the single source of truth:
 
-* **Metabolites** — columns ``ID``, ``Name``, ``KEGG ID``
+* **Metabolites** — columns ``ID``, ``Name``, ``KEGG ID``, ``Chemical formula``
 * **Reactions**   — columns ``ID``, ``Name``, ``Reaction stoichiometry``,
   ``Reversibility`` (1 = reversible, 0 = irreversible)
+
+``Chemical formula`` is optional and used only for metabolites that have no
+KEGG ID (the balance check can't look those up); when present it's used
+directly, overriding any KEGG lookup.
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ import io as _io
 
 import pandas as pd
 
-METABOLITE_COLS = ["ID", "Name", "KEGG ID"]
+METABOLITE_COLS = ["ID", "Name", "KEGG ID", "Chemical formula"]
 REACTION_COLS = ["ID", "Name", "Reaction stoichiometry", "Reversibility"]
 
 # Run-time selectors (the notebook's USER INPUTS cell).  Stored in an optional
