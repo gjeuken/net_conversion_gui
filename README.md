@@ -27,8 +27,22 @@ can stop and fix the input between any two stages.
 
 ## Quick start
 
+### Option A — conda (recommended; no separate Java install)
+
+conda-forge ships a JVM (`openjdk`), so this route installs **everything**,
+including the Java that efmtool needs, into one environment. Run it from the
+repo root (so the `pip -r` path in `environment.yml` resolves):
+
 ```bash
-# 1. Create an environment and install dependencies
+conda env create -f environment.yml
+conda activate catabolic
+python -m netconv_app.app
+```
+
+### Option B — venv + system Java
+
+```bash
+# 1. Create an environment and install the Python dependencies
 python -m venv ~/envs/catabolic
 ~/envs/catabolic/bin/pip install -r netconv_app/requirements.txt
 
@@ -36,20 +50,27 @@ python -m venv ~/envs/catabolic
 ~/envs/catabolic/bin/python -m netconv_app.app
 ```
 
+This route needs a **Java runtime installed separately** (see Requirements).
+
+---
+
 Open <http://127.0.0.1:8050>. The app opens pre-loaded with the
 **EMP-glycolysis → lactate** example, so it is non-empty on first run.
 
 ### Requirements
 
 * **Python 3.11+**
-* **A Java runtime (JRE).** efmtool runs on the JVM. Without it the EFM step
+* **A Java runtime (JVM).** efmtool runs on the JVM. Without it the EFM step
   fails with a clear message; the footer of the app shows whether a JVM was
-  detected. Install one with e.g.:
-  ```bash
-  sudo apt install default-jre      # Debian/Ubuntu
-  brew install openjdk              # macOS
-  ```
-  Verify with `java -version`.
+  detected.
+  * With **conda (Option A)** this is handled for you — `openjdk` is in
+    `environment.yml`, so there is nothing extra to install.
+  * With **venv (Option B)** install one system-wide, e.g.:
+    ```bash
+    sudo apt install default-jre      # Debian/Ubuntu
+    brew install openjdk              # macOS
+    ```
+    Verify with `java -version`.
 * **Outbound network** for KEGG lookups and the eQuilibrator first-run cache
   download. Most steps degrade gracefully offline — see [Offline
   behaviour](#offline-behaviour).
@@ -248,6 +269,7 @@ netconv_app/
   examples/              # example workbooks + their generator
   assets/style.css
   requirements.txt
+environment.yml          # conda env (bundles Java) — see Quick start, Option A
 CLAUDE.md                # the original build brief / specification
 educational_paper_pipeline.ipynb   # the reference notebook
 ```

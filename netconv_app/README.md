@@ -23,8 +23,9 @@ stop and fix the input between stages.
 ## Requirements
 
 * **Python 3.11+**
-* **A Java runtime (JRE).** efmtool runs on the JVM. Without it the EFM step
-  fails with a clear message. Install one with e.g.:
+* **A Java runtime (JVM).** efmtool runs on the JVM. Without it the EFM step
+  fails with a clear message. The **conda** install below bundles it
+  (`openjdk`); otherwise install one system-wide, e.g.:
   ```
   sudo apt install default-jre      # Debian/Ubuntu
   brew install openjdk              # macOS
@@ -34,6 +35,16 @@ stop and fix the input between stages.
   eQuilibrator first-run cache download. See *Offline behaviour* below.
 
 ## Install
+
+**With conda (recommended — bundles Java, no separate JRE install).** Run from
+the repo root so the `pip -r` path in `environment.yml` resolves:
+
+```
+conda env create -f environment.yml
+conda activate catabolic
+```
+
+**With venv** (needs Java installed separately, see Requirements):
 
 ```
 python -m venv ~/envs/catabolic        # or use your own env

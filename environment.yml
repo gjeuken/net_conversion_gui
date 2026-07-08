@@ -1,0 +1,18 @@
+# Conda environment for the netconv_app Dash tool.
+#
+# conda-forge's `openjdk` provides the JVM that efmtool needs, so you do NOT
+# have to install Java system-wide.
+#
+# Create it (from the repo root, so the pip -r path resolves):
+#     conda env create -f environment.yml
+#     conda activate catabolic
+#     python -m netconv_app.app
+name: catabolic
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - openjdk>=11          # the JVM efmtool runs on — no separate Java install
+  - pip
+  - pip:
+      - -r netconv_app/requirements.txt
