@@ -21,7 +21,7 @@ import pandas as pd
 from dash import (Dash, Input, Output, State, ctx, dash_table, dcc, html,
                   no_update)
 
-from pipeline import bigg, exchanges, idmap, io, kegg, run
+from pipeline import balance, bigg, exchanges, idmap, io, kegg, run
 
 app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY],
            title="KEGG workbook builder")
@@ -81,6 +81,30 @@ app.layout = dbc.Container([
                              style={"maxHeight": "160px", "overflowY": "auto",
                                     "fontSize": "12px", "fontFamily": "monospace",
                                     "marginTop": "0.5rem"})),
+    ]), className="mb-3"),
+
+    dbc.Card(dbc.CardBody([
+        html.H5("1a · Add a reaction manually (non-KEGG)"),
+        html.P("For transport, PTS import, ion translocation or designed "
+               "reactions KEGG has no entry for. Write the stoichiometry in "
+               "working ids with any arrow (-> or <=>). Any metabolite not yet "
+               "in the table is added as a placeholder for you to complete "
+               "(KEGG id and/or chemical formula, so it can balance).",
+               className="text-muted small"),
+        dbc.Row([
+            dbc.Col(dbc.Input(id="man-id", placeholder="Reaction id (e.g. PTS_GLC)"),
+                    md=3),
+            dbc.Col(dbc.Input(id="man-name", placeholder="Name (optional)"), md=3),
+            dbc.Col(dbc.Input(id="man-eq",
+                              placeholder="e.g. GLC + PEP -> G6P + PYR"), md=4),
+            dbc.Col(dbc.Select(id="man-rev", value="1",
+                               options=[{"label": "reversible", "value": "1"},
+                                        {"label": "irreversible", "value": "0"}]),
+                    md=1),
+            dbc.Col(dbc.Button("Add", id="btn-add-manual", color="primary"), md=1),
+        ], className="g-2"),
+        html.Div(id="manual-messages",
+                 style={"fontSize": "12px", "marginTop": "0.5rem"}),
     ]), className="mb-3"),
 
     dbc.Card(dbc.CardBody([
@@ -303,6 +327,61 @@ def translate_bigg(_n, met_data, rxn_data):
 
 
 @app.callback(
+    Output("tbl-met", "data", allow_duplicate=True),
+    Output("tbl-rxn", "data", allow_duplicate=True),
+    Output("manual-messages", "children"),
+    Input("btn-add-manual", "n_clicks"),
+    State("man-id", "value"),
+    State("man-name", "value"),
+    State("man-eq", "value"),
+    State("man-rev", "value"),
+    State("tbl-met", "data"),
+    State("tbl-rxn", "data"),
+    prevent_initial_call=True,
+)
+def add_manual_reaction(_n, rid, name, eq, rev, met_data, rxn_data):
+    rid = (rid or "").strip()
+    eq = (eq or "").strip()
+    if not rid or not eq:
+        return no_update, no_update, "Enter a reaction id and stoichiometry."
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    if (df_rxn["ID"].astype(str).str.strip() == rid).any():
+        return no_update, no_update, dbc.Alert(
+            f"⚠ Reaction '{rid}' already exists.", color="warning")
+    try:
+        subs, prods = balance.parse_equation(eq)
+    except Exception as e:
+        return no_update, no_update, dbc.Alert(
+            f"⚠ Could not parse the stoichiometry: {e}", color="danger")
+
+    df_rxn = pd.concat([df_rxn, pd.DataFrame([{
+        "ID": rid, "Name": (name or "").strip() or rid,
+        "Reaction stoichiometry": balance.normalize_arrow(eq),
+        "Reversibility": int(rev) if rev in ("0", "1") else 1,
+    }])], ignore_index=True)
+
+    known = {str(x).strip() for x in df_met["ID"].dropna()}
+    new_mets = []
+    for _c, cid in subs + prods:
+        cid = str(cid).strip()
+        if cid and cid not in known:
+            new_mets.append({"ID": cid, "Name": cid, "KEGG ID": "",
+                             "Chemical formula": ""})
+            known.add(cid)
+    if new_mets:
+        df_met = pd.concat([df_met, pd.DataFrame(new_mets)], ignore_index=True)
+
+    parts = [f"✓ Added reaction {rid}"]
+    if new_mets:
+        parts.append("new metabolite placeholder(s): "
+                     + ", ".join(m["ID"] for m in new_mets)
+                     + " — add a KEGG id or chemical formula so they balance.")
+    return (df_to_records(df_met), df_to_records(df_rxn),
+            dbc.Alert(" — ".join(parts), color="success"))
+
+
+@app.callback(
     Output("tbl-rename", "data"),
     Input("btn-load-rename", "n_clicks"),
     State("tbl-met", "data"),
@@ -425,6 +504,7 @@ def update_balance(met_data, rxn_data):
     disp = pd.DataFrame({
         "Reaction": df_bal["reaction_id"],
         "Status": df_bal.apply(status_cell, axis=1),
+        "Equation (working ids)": df_bal["equation_custom"],
         "KEGG equation": df_bal["equation_kegg"],
     })
     table = dash_table.DataTable(

@@ -69,6 +69,13 @@ and serves a separate port so it can run alongside the analysis app:
 python -m kegg_builder_app.app      # http://127.0.0.1:8051
 ```
 
+**Non-KEGG reactions.** Transport, PTS import, ion translocation and designed
+reactions have no KEGG entry — add them with the manual-reaction form (id,
+stoichiometry in working ids, reversibility). Any metabolite not yet in the
+table is auto-added as a placeholder for you to complete (KEGG id and/or
+chemical formula so it can balance). The live balance panel shows each reaction
+in both the **working ids** and the KEGG ids.
+
 **Optional BiGG ids for readability.** After fetching, one click translates
 KEGG compound ids to human-readable **BiGG** ids (`C00031 → glc__D`) using
 BiGG's cross-reference file (downloaded once, then cached). The `KEGG ID`
