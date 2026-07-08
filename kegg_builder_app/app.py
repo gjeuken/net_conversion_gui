@@ -169,6 +169,23 @@ app.layout = dbc.Container([
     ], className="mb-3"),
 
     dbc.Card(dbc.CardBody([
+        html.H5("Remove reactions"),
+        html.P("Trim reactions you don't want — handy after loading a KEGG "
+               "module that pulls in more than you need. Optionally drop any "
+               "metabolites left unused afterwards.", className="text-muted small"),
+        dcc.Dropdown(id="remove-rxns", multi=True, className="mb-2",
+                     placeholder="Reactions to remove…"),
+        dbc.ButtonGroup([
+            dbc.Button("Remove selected reactions", id="btn-remove-rxns",
+                       color="danger", outline=True, size="sm"),
+            dbc.Button("Remove unused metabolites", id="btn-prune-mets",
+                       color="secondary", outline=True, size="sm"),
+        ]),
+        html.Div(id="remove-messages",
+                 style={"fontSize": "12px", "marginTop": "0.5rem"}),
+    ]), className="mb-3"),
+
+    dbc.Card(dbc.CardBody([
         html.H5("1d · Exchange & transport reactions"),
         html.P("Pick the metabolites that cross the system boundary. For each, "
                "the app adds an extracellular counterpart, a transport reaction "
@@ -437,6 +454,77 @@ def apply_custom_ids(_n, rename_rows, met_data, rxn_data):
     return (df_to_records(m2), df_to_records(r2),
             dbc.Alert(f"Renamed {len(id_map)} metabolite(s): {changes}",
                       color="success"))
+
+
+_ARROWS = {"<=>", "->", "=>", "<->", "→", "<-", "<="}
+
+
+def _referenced_ids(df_rxn):
+    """Working metabolite ids that appear in any reaction stoichiometry."""
+    used = set()
+    for eq in df_rxn["Reaction stoichiometry"].dropna().astype(str):
+        for tok in eq.replace("+", " ").split():
+            if tok in _ARROWS:
+                continue
+            try:
+                float(tok)  # a stoichiometric coefficient, not a metabolite
+                continue
+            except ValueError:
+                pass
+            used.add(tok)
+    return used
+
+
+@app.callback(
+    Output("remove-rxns", "options"),
+    Input("tbl-rxn", "data"),
+)
+def update_remove_options(rxn_data):
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    return [{"label": r, "value": r}
+            for r in df_rxn["ID"].dropna().astype(str) if r.strip()]
+
+
+@app.callback(
+    Output("tbl-rxn", "data", allow_duplicate=True),
+    Output("remove-messages", "children"),
+    Input("btn-remove-rxns", "n_clicks"),
+    State("remove-rxns", "value"),
+    State("tbl-rxn", "data"),
+    prevent_initial_call=True,
+)
+def remove_reactions(_n, selected, rxn_data):
+    if not selected:
+        return no_update, "Select at least one reaction to remove."
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    drop = set(selected)
+    kept = df_rxn[~df_rxn["ID"].astype(str).isin(drop)]
+    n = len(df_rxn) - len(kept)
+    return (df_to_records(kept),
+            dbc.Alert(f"Removed {n} reaction(s): {', '.join(sorted(drop))}. "
+                      f"Metabolites are kept — use 'Remove unused metabolites' "
+                      f"to prune any orphans.", color="success"))
+
+
+@app.callback(
+    Output("tbl-met", "data", allow_duplicate=True),
+    Output("remove-messages", "children", allow_duplicate=True),
+    Input("btn-prune-mets", "n_clicks"),
+    State("tbl-met", "data"),
+    State("tbl-rxn", "data"),
+    prevent_initial_call=True,
+)
+def prune_metabolites(_n, met_data, rxn_data):
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    used = _referenced_ids(df_rxn)
+    mask_keep = df_met["ID"].astype(str).str.strip().isin(used)
+    removed = [str(x) for x in df_met.loc[~mask_keep, "ID"].dropna()]
+    if not removed:
+        return no_update, "No unused metabolites — nothing to remove."
+    return (df_to_records(df_met[mask_keep]),
+            dbc.Alert(f"Removed {len(removed)} unused metabolite(s): "
+                      f"{', '.join(removed)}.", color="success"))
 
 
 @app.callback(

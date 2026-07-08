@@ -69,6 +69,11 @@ and serves a separate port so it can run alongside the analysis app:
 python -m kegg_builder_app.app      # http://127.0.0.1:8051
 ```
 
+**Removing reactions.** Trim reactions you don't want — useful after loading a
+KEGG module that pulls in more than you need. Multi-select them and remove in
+one click, then optionally drop any metabolites left unused. (Single rows can
+also be deleted directly in the table.)
+
 **Non-KEGG reactions.** Transport, PTS import, ion translocation and designed
 reactions have no KEGG entry — add them with the manual-reaction form (id,
 stoichiometry in working ids, reversibility). Any metabolite not yet in the
