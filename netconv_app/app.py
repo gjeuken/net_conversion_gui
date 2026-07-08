@@ -191,10 +191,15 @@ def workbench_tab():
     ], fluid=True)
 
 
-def fba_tab():
+def sanity_tab():
     return dbc.Container([
-        dbc.Button("Build model & run FBA checks", id="btn-fba", color="primary",
-                   className="my-3"),
+        html.P("Before the (potentially expensive) EFM enumeration, these checks "
+               "catch the most common modelling mistakes — reactions pointing the "
+               "wrong way, products that can't actually be made, and dead-end "
+               "reactions. Each card explains what it means and what to do if it "
+               "fails.", className="text-muted mt-3"),
+        dbc.Button("Run sanity checks", id="btn-fba", color="primary",
+                   className="mb-3"),
         dcc.Loading(html.Div(id="fba-output")),
     ], fluid=True)
 
@@ -271,7 +276,7 @@ app.layout = dbc.Container([
            "Ω measure (kJ/mol).", className="text-muted"),
     dbc.Tabs([
         dbc.Tab(workbench_tab(), label="① Workbench", tab_id="tab-workbench"),
-        dbc.Tab(fba_tab(), label="② Model & FBA", tab_id="tab-fba"),
+        dbc.Tab(sanity_tab(), label="② Sanity checks", tab_id="tab-fba"),
         dbc.Tab(efm_tab(), label="③ EFMs", tab_id="tab-efm"),
         dbc.Tab(thermo_tab(), label="④ Net conversions & ΔG", tab_id="tab-thermo"),
         dbc.Tab(downloads_tab(), label="⑤ Downloads", tab_id="tab-downloads"),
@@ -563,6 +568,31 @@ def _collect_config(name, subs, prods, carbon, energy, rev, pseudo):
 # --------------------------------------------------------------------------- #
 # Model & FBA
 # --------------------------------------------------------------------------- #
+# A sanity-check card: coloured badge + plain-language "what it means" +
+# the numeric result + an interpretation of what the result implies.
+_STATUS = {
+    "pass": ("success", "✓ Pass"),
+    "warn": ("warning", "⚠ Check this"),
+    "fail": ("danger", "✗ Problem"),
+    "info": ("secondary", "ℹ For info"),
+}
+
+
+def _ex_name(rid):
+    return rid[2:] if isinstance(rid, str) and rid.startswith("EX") else rid
+
+
+def _check_card(status, title, what, result, implication):
+    color, badge = _STATUS[status]
+    return dbc.Card(dbc.CardBody([
+        html.Div([dbc.Badge(badge, color=color, className="me-2"),
+                  html.Span(title, className="fw-bold")], className="mb-2"),
+        html.Div(what, className="text-muted small mb-2"),
+        html.Div(result, className="mb-2"),
+        html.Div(implication),
+    ]), className="mb-3", color=color, outline=True)
+
+
 @app.callback(
     Output("fba-output", "children"),
     Input("btn-fba", "n_clicks"),
@@ -589,36 +619,122 @@ def run_fba(_n, met_data, rxn_data, name, subs, prods, carbon, energy, rev, pseu
     except Exception as e:
         return dbc.Alert(f"Model build/FBA failed: {e}", color="danger")
 
+    ename = _ex_name(cfg["ENERGY_PRODUCT"])
+    sname = _ex_name(cfg["SUBSTRATES"][0])
+
+    # --- Check 1: no energy-generating cycle --------------------------------
     atp = checks["atp_without_substrate"]
     atp_ok = abs(atp) < 1e-6 if atp == atp else False  # nan-safe
-    atp_card = dbc.Alert(
-        [html.B(f"Max {cfg['ENERGY_PRODUCT']} with substrate blocked: {atp:.4g}"),
-         html.Br(),
-         "≈ 0 ✓ no energy-generating cycle" if atp_ok
-         else "⚠ nonzero — energy-generating cycle present!"],
-        color="success" if atp_ok else "danger")
-    cycle = (html.Pre(str(checks["atp_cycle_fluxes"]))
-             if checks["atp_cycle_fluxes"] else None)
+    if atp_ok:
+        imp1 = html.Span("No energy-generating cycle — the reaction directions "
+                         "are thermodynamically consistent.", className="text-success")
+    else:
+        fluxes = checks["atp_cycle_fluxes"] or {}
+        flux_lines = "\n".join(f"{rid:<12} {val:+.3g}"
+                               for rid, val in sorted(fluxes.items()))
+        imp1 = html.Div([
+            html.Span("This is a modelling error: the network can create energy "
+                      "from nothing. It almost always means a reaction's "
+                      "reversibility or direction is wrong. The reactions "
+                      "carrying flux in this impossible cycle:",
+                      className="text-danger"),
+            html.Pre(flux_lines, className="mt-2 small"),
+        ])
+    card1 = _check_card(
+        "pass" if atp_ok else "fail",
+        "No free energy from nothing",
+        f"With every substrate uptake switched off, the network should not be "
+        f"able to make the energy carrier ({ename}). If it can, some reaction is "
+        f"letting it run a perpetual-motion energy cycle.",
+        html.Span([f"Most {ename} the model can make with no substrate: ",
+                   html.B(f"{atp:.3g}"), "  (should be ≈ 0)"]),
+        imp1)
 
+    # --- Check 2: products are actually reachable ---------------------------
     yields = checks["product_yields"]
-    yrows = [{"Product": p[2:] if p.startswith("EX") else p,
-              "Max yield / substrate": "infeasible" if y is None else f"{y:.4g}"}
+    infeasible = [p for p, y in yields.items() if y is None]
+    yrows = [{"Product": _ex_name(p),
+              "Max amount per 1 " + sname: "not reachable" if y is None else f"{y:.3g}"}
              for p, y in yields.items()]
     ytable = dash_table.DataTable(
-        data=yrows, columns=[{"name": c, "id": c} for c in ["Product", "Max yield / substrate"]],
-        style_cell={"textAlign": "left", "fontFamily": "monospace"})
+        data=yrows,
+        columns=[{"name": c, "id": c}
+                 for c in ["Product", "Max amount per 1 " + sname]],
+        style_cell={"textAlign": "left", "fontFamily": "monospace",
+                    "fontSize": "12px", "padding": "4px"},
+        style_header={"fontWeight": "bold"},
+        style_table={"overflowX": "auto"}) if yrows else None
+    if not yields:
+        status2 = "info"
+        imp2 = html.Span("No carbon products were selected. Add them in the "
+                         "Workbench selectors if you want to check reachability.",
+                         className="text-muted")
+    elif infeasible:
+        status2 = "warn"
+        names = ", ".join(_ex_name(p) for p in infeasible)
+        imp2 = html.Span(
+            f"{names} cannot be produced from {sname}. Either a reaction is "
+            f"missing or points the wrong way, or it isn't really a product of "
+            f"this network. It will not appear in any EFM.",
+            className="text-warning")
+    else:
+        status2 = "pass"
+        imp2 = html.Span(f"Every selected product can be made from {sname}.",
+                         className="text-success")
+    card2 = _check_card(
+        status2, "Products can be made from the substrate",
+        f"Each product you flagged should be reachable from {sname}. The number "
+        f"is the most product the model can make per unit of {sname} (an FBA "
+        f"optimum — an upper bound, not a specific pathway).",
+        ytable or html.Span("—"),
+        imp2)
 
-    removed = checks["removed_exchanges"]
+    # --- Check 3: network connectivity (blocked reactions) ------------------
     blocked = checks["blocked_reactions"]
-    return html.Div([
-        atp_card, cycle,
-        html.H6("Max individual product yields"), ytable,
-        html.Hr(),
-        html.P(f"Exchanges removed (not in substrate/product/rev sets): "
-               f"{removed or 'none'}"),
-        html.P(f"Blocked reactions pruned ({len(blocked)}): {blocked or 'none'}"),
-        dbc.Alert("Model built and pruned. Proceed to the EFMs tab.", color="info"),
-    ])
+    removed = checks["removed_exchanges"]
+    if blocked:
+        status3 = "warn"
+        imp3 = html.Span(
+            "These are inactive as the network stands — usually a missing "
+            "connecting reaction or exchange. If you expected one to carry "
+            "flux, check that each of its metabolites is both produced and "
+            "consumed somewhere. They are pruned automatically, so the EFM "
+            "step is unaffected.", className="text-warning")
+        blocked_result = html.Div([
+            html.Span([html.B(f"{len(blocked)}"), " reaction(s) pruned: "]),
+            html.Code(", ".join(blocked)),
+        ])
+    else:
+        status3 = "pass"
+        imp3 = html.Span("Every reaction can carry flux — the network is fully "
+                         "connected.", className="text-success")
+        blocked_result = html.Span([html.B("0"), " blocked reactions."])
+    card3 = _check_card(
+        status3, "Every reaction can carry flux",
+        "Blocked reactions can never carry any flux at steady state (dead "
+        "ends). They are removed before enumerating EFMs.",
+        blocked_result,
+        imp3)
+
+    # --- Overall banner + boundary note -------------------------------------
+    if not atp_ok:
+        banner = dbc.Alert("A problem was found that would corrupt the EFM "
+                           "results — fix it in the Workbench before continuing.",
+                           color="danger")
+    elif infeasible:
+        banner = dbc.Alert("No blocking problems, but check the warnings below "
+                           "before continuing.", color="warning")
+    else:
+        banner = dbc.Alert("All checks passed — ready to enumerate EFMs (tab ③).",
+                           color="success")
+
+    boundary = html.P(
+        ["Boundary applied: exchanges removed because they were not marked as a "
+         "substrate, product, or reversible exchange — ",
+         html.Code(", ".join(map(str, removed)) if removed else "none"), "."],
+        className="text-muted small")
+
+    return html.Div([banner, card1, card2, card3, boundary])
 
 
 # --------------------------------------------------------------------------- #
@@ -769,14 +885,13 @@ def run_thermo(_n, efm_store, met_data, rxn_data, which):
         html.H5(f"{len(net_df)} distinct net conversion(s) "
                 f"from {efm_store['n_efms']} EFMs"),
         html.P("Ω = −ΔG_CAT / Σ(vᵢ/v_NC) over metabolic reactions (= MDF, no "
-               "concentration bounds). The equal-flux bound −ΔG/n_R coincides "
-               "with Ω only when all fluxes are equal.", className="text-muted small"),
+               "concentration bounds).", className="text-muted small"),
         table,
         (html.Div([
             html.H6("Per-EFM breakdown", className="mt-4"),
             html.P("Net conversions produced by more than one EFM: each EFM "
                    "shares the same net-conversion ΔG but has its own flux sum, "
-                   "so Ω and the equal-flux bound differ per EFM.",
+                   "so Ω differs per EFM.",
                    className="text-muted small"),
             *details,
         ]) if details else None),
@@ -792,7 +907,7 @@ def _per_efm_details(per_efm, which):
 
     ΔG is a property of the net conversion (shared by all its EFMs), so it is
     shown once in the section header; the per-EFM table carries the quantities
-    that actually differ between EFMs — the flux sum, n_R, Ω and the bound.
+    that actually differ between EFMs — the flux sum, n_R and Ω.
     """
     if per_efm.empty:
         return []
@@ -813,7 +928,6 @@ def _per_efm_details(per_efm, which):
             "n_R": [fmt(v) for v in grp["n_metabolic_reactions"]],
             "Σ(vᵢ/v_NC)": [fmt(v) for v in grp["flux_sum"]],
             f"Ω (from {dg_label}, kJ/mol)": [fmt(v) for v in grp["Omega"]],
-            "Equal-flux bound −ΔG/n_R": [fmt(v) for v in grp["equal_flux_bound"]],
         })
         sub_table = dash_table.DataTable(
             data=sub.to_dict("records"),
@@ -852,9 +966,6 @@ def _format_net_table(net_df, which):
                           zip(df["dGm value"], df["dGm error"])],
         f"Ω (from {'ΔGm′' if which == 'dGm' else 'ΔG°′'}, kJ/mol)":
             [rng(lo, hi) for lo, hi in zip(df["Omega_min"], df["Omega_max"])],
-        "Equal-flux bound −ΔG/n_R": [rng(lo, hi) for lo, hi in
-                                     zip(df["equal_flux_bound_min"],
-                                         df["equal_flux_bound_max"])],
     })
     return out
 

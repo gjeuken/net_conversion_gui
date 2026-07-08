@@ -111,14 +111,21 @@ pre-suggested — but which metabolites are external, and reaction
 reversibility/direction, remain **your** modelling choices. The app never makes
 those scientific calls silently.
 
-### ② Model & FBA
+### ② Sanity checks
 
-Builds the COBRApy model and reports:
+Builds the COBRApy model and runs FBA-based checks, presented as plain-language
+pass/warn/fail cards that explain what each result implies:
 
-* the **blocked-reaction** list,
-* the **ATP-without-substrate** check (green if ≈ 0; red means an
-  energy-generating cycle exists, and the offending fluxes are surfaced),
-* per-product **max yields** on the substrate.
+* **No free energy from nothing** — maximises the energy carrier with all
+  substrate uptake blocked. A nonzero result means a thermodynamically
+  impossible energy-generating cycle (usually a wrong reaction direction); the
+  offending fluxes are shown.
+* **Products can be made from the substrate** — the max amount of each flagged
+  product per unit substrate; flags any product that isn't reachable.
+* **Every reaction can carry flux** — the blocked (dead-end) reactions that are
+  pruned before EFM enumeration.
+
+The underlying calculations are unchanged; only the presentation differs.
 
 ### ③ EFMs
 
