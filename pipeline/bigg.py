@@ -22,6 +22,7 @@ import re
 import urllib.request
 
 from . import cache
+from .idmap import apply_id_map
 from .kegg import get_compound_name
 
 BIGG_URL = "http://bigg.ucsd.edu/static/namespace/bigg_models_metabolites.txt"
@@ -159,27 +160,5 @@ def translate_to_bigg(df_metabolites, df_reactions, mapping=None):
             id_map[old] = new
         report.append({"old": old, "new": new, "kegg": kegg, "status": status})
 
-    if id_map:
-        df_met["ID"] = df_met["ID"].map(lambda x: id_map.get(str(x).strip(), x))
-        df_rxn["Reaction stoichiometry"] = df_rxn["Reaction stoichiometry"].map(
-            lambda eq: _rewrite_equation(eq, id_map))
-        df_rxn["ID"] = df_rxn["ID"].map(lambda r: _rewrite_exchange_id(r, id_map))
-
+    df_met, df_rxn = apply_id_map(df_met, df_rxn, id_map)
     return df_met, df_rxn, report
-
-
-def _rewrite_equation(eq, id_map):
-    if not isinstance(eq, str) or not id_map:
-        return eq
-    pattern = re.compile(
-        r"(?<![A-Za-z0-9_])(" +
-        "|".join(re.escape(k) for k in sorted(id_map, key=len, reverse=True)) +
-        r")(?![A-Za-z0-9_])")
-    return pattern.sub(lambda m: id_map[m.group(1)], eq)
-
-
-def _rewrite_exchange_id(rid, id_map):
-    rid = str(rid)
-    if rid.startswith("EX") and rid[2:] in id_map:
-        return "EX" + id_map[rid[2:]]
-    return rid

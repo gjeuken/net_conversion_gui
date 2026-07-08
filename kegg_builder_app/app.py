@@ -21,7 +21,7 @@ import pandas as pd
 from dash import (Dash, Input, Output, State, ctx, dash_table, dcc, html,
                   no_update)
 
-from pipeline import bigg, exchanges, io, kegg, run
+from pipeline import bigg, exchanges, idmap, io, kegg, run
 
 app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY],
            title="KEGG workbook builder")
@@ -98,6 +98,37 @@ app.layout = dbc.Container([
                                     "fontSize": "12px", "marginTop": "0.5rem"})),
     ]), className="mb-3"),
 
+    dbc.Card(dbc.CardBody([
+        html.H5("1c · Custom metabolite ids (optional)"),
+        html.P("Set your own working ids. Click Load to fill the table from the "
+               "current metabolites, edit the New ID column, then Apply — the "
+               "reaction stoichiometries and EX/transport ids are rewritten to "
+               "match, and the KEGG ID column is kept. Do this before adding "
+               "exchanges so those pick up your ids.", className="text-muted small"),
+        dbc.ButtonGroup([
+            dbc.Button("Load current metabolites", id="btn-load-rename",
+                       color="secondary", outline=True, size="sm"),
+            dbc.Button("Apply custom ids", id="btn-apply-rename",
+                       color="secondary", size="sm"),
+        ], className="mb-2"),
+        dash_table.DataTable(
+            id="tbl-rename",
+            columns=[{"name": "KEGG ID", "id": "KEGG ID", "editable": False},
+                     {"name": "Current ID", "id": "Current ID", "editable": False},
+                     {"name": "New ID", "id": "New ID", "editable": True}],
+            data=[], editable=True, page_size=100,
+            style_table={"overflowX": "auto", "maxHeight": "300px",
+                         "overflowY": "auto"},
+            style_cell={"fontFamily": "monospace", "fontSize": "12px",
+                        "textAlign": "left", "padding": "4px"},
+            style_header={"fontWeight": "bold"},
+            style_data_conditional=[
+                {"if": {"column_id": "New ID"}, "backgroundColor": "#f0f7ff"}],
+        ),
+        html.Div(id="rename-messages",
+                 style={"fontSize": "12px", "marginTop": "0.5rem"}),
+    ]), className="mb-3"),
+
     dbc.Row([
         dbc.Col([
             html.H5("Reactions"),
@@ -114,7 +145,7 @@ app.layout = dbc.Container([
     ], className="mb-3"),
 
     dbc.Card(dbc.CardBody([
-        html.H5("1c · Exchange & transport reactions"),
+        html.H5("1d · Exchange & transport reactions"),
         html.P("Pick the metabolites that cross the system boundary. For each, "
                "the app adds an extracellular counterpart, a transport reaction "
                "(X ⇌ Xex) and an exchange reaction (EXX). Direction stays a "
@@ -269,6 +300,64 @@ def translate_bigg(_n, met_data, rxn_data):
         for x in flags]) if flags else None
     return (df_to_records(m2), df_to_records(r2),
             html.Div([summary, detail] if detail else [summary]))
+
+
+@app.callback(
+    Output("tbl-rename", "data"),
+    Input("btn-load-rename", "n_clicks"),
+    State("tbl-met", "data"),
+    prevent_initial_call=True,
+)
+def populate_rename(_n, met_data):
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    rows = []
+    for _, r in df_met.iterrows():
+        mid = str(r.get("ID", "")).strip()
+        if not mid:
+            continue
+        rows.append({"KEGG ID": r.get("KEGG ID"), "Current ID": mid,
+                     "New ID": mid})
+    return rows
+
+
+@app.callback(
+    Output("tbl-met", "data", allow_duplicate=True),
+    Output("tbl-rxn", "data", allow_duplicate=True),
+    Output("rename-messages", "children"),
+    Input("btn-apply-rename", "n_clicks"),
+    State("tbl-rename", "data"),
+    State("tbl-met", "data"),
+    State("tbl-rxn", "data"),
+    prevent_initial_call=True,
+)
+def apply_custom_ids(_n, rename_rows, met_data, rxn_data):
+    if not rename_rows:
+        return no_update, no_update, "Click 'Load current metabolites' first."
+    id_map = {}
+    for row in rename_rows:
+        cur = str(row.get("Current ID", "")).strip()
+        new = str(row.get("New ID", "")).strip()
+        if cur and new and new != cur:
+            id_map[cur] = new
+    if not id_map:
+        return no_update, no_update, "No id changes to apply."
+
+    # Validate: the resulting ids must stay unique (no two metabolites collide).
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    current_ids = [str(x).strip() for x in df_met["ID"].dropna()]
+    resulting = [id_map.get(i, i) for i in current_ids]
+    dupes = sorted({x for x in resulting if resulting.count(x) > 1})
+    if dupes:
+        return no_update, no_update, dbc.Alert(
+            f"⚠ These ids would collide — pick distinct New IDs: "
+            f"{', '.join(dupes)}", color="danger")
+
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    m2, r2 = idmap.apply_id_map(df_met, df_rxn, id_map)
+    changes = ", ".join(f"{k}→{v}" for k, v in id_map.items())
+    return (df_to_records(m2), df_to_records(r2),
+            dbc.Alert(f"Renamed {len(id_map)} metabolite(s): {changes}",
+                      color="success"))
 
 
 @app.callback(

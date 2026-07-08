@@ -81,6 +81,13 @@ namespace mismatch (e.g. fructose-6-P, whose BiGG entry references a different
 KEGG id). Those fall back to a slugified KEGG name and are **flagged** in the
 translation report so you can hand-edit them.
 
+**Custom metabolite ids.** Prefer your own abbreviations? Load the current
+metabolites into the rename table, edit the *New ID* column, and apply — the
+reaction stoichiometries and `EX`/transport ids are rewritten to match (and
+the `KEGG ID` column is kept, so balance/thermo are unaffected). Colliding ids
+are rejected with a clear message. Do this before adding exchanges so those
+pick up your ids.
+
 **Boundary metabolites → exchange + transport.** KEGG has no compartments, so
 a modelled pathway needs boundary reactions. Pick the metabolites that cross
 the system boundary and the builder adds, for each `X`, an extracellular
@@ -290,6 +297,7 @@ pipeline/                # shared core, imported by both apps
   io.py                  # canonical dataframes, Excel + config save/load
   kegg.py                # KEGG REST: reaction + compound fetch (formula/charge/name)
   bigg.py                # optional KEGG->BiGG id translation (readability)
+  idmap.py               # consistent metabolite-id rename across met + reaction frames
   exchanges.py           # auto-add exchange + transport reactions for boundary mets
   balance.py             # formula/charge parsing, atom + charge balance
   model.py               # COBRApy model, exchanges, FBA, pruning
