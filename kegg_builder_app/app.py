@@ -21,7 +21,7 @@ import pandas as pd
 from dash import (Dash, Input, Output, State, ctx, dash_table, dcc, html,
                   no_update)
 
-from pipeline import io, kegg, run
+from pipeline import bigg, io, kegg, run
 
 app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY],
            title="KEGG workbook builder")
@@ -81,6 +81,21 @@ app.layout = dbc.Container([
                              style={"maxHeight": "160px", "overflowY": "auto",
                                     "fontSize": "12px", "fontFamily": "monospace",
                                     "marginTop": "0.5rem"})),
+    ]), className="mb-3"),
+
+    dbc.Card(dbc.CardBody([
+        html.H5("1b · Human-readable ids (optional)"),
+        html.P("Translate KEGG compound ids to BiGG ids (e.g. C00031 → glc__D). "
+               "The KEGG ID column is kept, so balance and thermodynamics still "
+               "resolve compounds correctly. Compounds with no clean BiGG id "
+               "fall back to a slugified KEGG name and are flagged for you to "
+               "hand-edit. First use downloads a small BiGG file (needs network).",
+               className="text-muted small"),
+        dbc.Button("Translate KEGG → BiGG ids", id="btn-bigg",
+                   color="secondary", outline=True),
+        dcc.Loading(html.Div(id="bigg-messages",
+                             style={"maxHeight": "220px", "overflowY": "auto",
+                                    "fontSize": "12px", "marginTop": "0.5rem"})),
     ]), className="mb-3"),
 
     dbc.Row([
@@ -194,6 +209,49 @@ def _split_ids(text):
         if tok:
             out.append(tok)
     return out
+
+
+_BIGG_STATUS_LABEL = {
+    "bigg-ambiguous": "ambiguous — picked shortest BiGG id",
+    "name-fallback": "no BiGG id — used slugified KEGG name",
+    "kegg-fallback": "no KEGG id — left unchanged",
+    "collision": "id clashed — suffixed to keep it unique",
+}
+
+
+@app.callback(
+    Output("tbl-met", "data", allow_duplicate=True),
+    Output("tbl-rxn", "data", allow_duplicate=True),
+    Output("bigg-messages", "children"),
+    Input("btn-bigg", "n_clicks"),
+    State("tbl-met", "data"),
+    State("tbl-rxn", "data"),
+    prevent_initial_call=True,
+)
+def translate_bigg(_n, met_data, rxn_data):
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    if df_met.empty or df_met["ID"].dropna().empty:
+        return no_update, no_update, "Fetch some reactions first."
+    try:
+        m2, r2, report = bigg.translate_to_bigg(df_met, df_rxn)
+    except bigg.BiggError as e:
+        return no_update, no_update, dbc.Alert(
+            f"⚠ {e} — needs network on first use.", color="warning")
+
+    n = len(report)
+    clean = sum(1 for x in report if x["status"] == "bigg")
+    flags = [x for x in report if x["status"] != "bigg"]
+    summary = dbc.Alert(
+        f"Translated {clean}/{n} metabolites to clean BiGG ids"
+        + (f"; {len(flags)} need a look." if flags else "."),
+        color="success" if not flags else "info")
+    detail = html.Ul([
+        html.Li([html.Code(f"{x['kegg'] or x['old']} → {x['new']}"),
+                 f"  ({_BIGG_STATUS_LABEL.get(x['status'], x['status'])})"])
+        for x in flags]) if flags else None
+    return (df_to_records(m2), df_to_records(r2),
+            html.Div([summary, detail] if detail else [summary]))
 
 
 @app.callback(

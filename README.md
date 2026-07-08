@@ -69,6 +69,18 @@ and serves a separate port so it can run alongside the analysis app:
 python -m kegg_builder_app.app      # http://127.0.0.1:8051
 ```
 
+**Optional BiGG ids for readability.** After fetching, one click translates
+KEGG compound ids to human-readable **BiGG** ids (`C00031 → glc__D`) using
+BiGG's cross-reference file (downloaded once, then cached). The `KEGG ID`
+column is kept intact, so balance and thermodynamics still resolve compounds
+by KEGG — BiGG is a display convenience, not ground truth. The mapping is
+partial: on central-carbon metabolism roughly **87 %** get a clean 1:1 id,
+~6 % are ambiguous (resolved by preferring the shortest id), and ~8 % have no
+clean BiGG id — either genuinely absent (designed metabolites) or a KEGG-side
+namespace mismatch (e.g. fructose-6-P, whose BiGG entry references a different
+KEGG id). Those fall back to a slugified KEGG name and are **flagged** in the
+translation report so you can hand-edit them.
+
 ### Requirements
 
 * **Python 3.11+**
@@ -269,6 +281,7 @@ routed to manual entry rather than guessed.
 pipeline/                # shared core, imported by both apps
   io.py                  # canonical dataframes, Excel + config save/load
   kegg.py                # KEGG REST: reaction + compound fetch (formula/charge/name)
+  bigg.py                # optional KEGG->BiGG id translation (readability)
   balance.py             # formula/charge parsing, atom + charge balance
   model.py               # COBRApy model, exchanges, FBA, pruning
   efm.py                 # S matrix, efmtool, rank check, normalisation
