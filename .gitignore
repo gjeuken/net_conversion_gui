@@ -5,7 +5,8 @@ __pycache__/
 .venv/
 venv/
 
-# App runtime caches
+# App runtime caches (KEGG cache lives next to the pipeline package)
+.cache/
 netconv_app/.cache/
 .diskcache/
 cache/

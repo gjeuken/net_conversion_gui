@@ -1,0 +1,319 @@
+"""KEGG workbook builder.
+
+A small, single-purpose companion to the main analysis app: assemble the two
+canonical dataframes (Metabolites, Reactions) **from KEGG** — reaction ids or a
+whole module — check balance live, patch the usual KEGG omissions (H+/H2O), and
+download the ``.xlsx`` the analysis app (or the paper's supplements) consumes.
+
+It depends only on the shared :mod:`pipeline` package, needs **no Java** (there
+is no efmtool/EFM step here), and serves ``http://127.0.0.1:8051`` so it can run
+alongside the analysis app.
+
+Run from the repo root:  ``python -m kegg_builder_app.app``
+"""
+
+from __future__ import annotations
+
+import base64
+
+import dash_bootstrap_components as dbc
+import pandas as pd
+from dash import (Dash, Input, Output, State, ctx, dash_table, dcc, html,
+                  no_update)
+
+from pipeline import io, kegg, run
+
+app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY],
+           title="KEGG workbook builder")
+server = app.server
+
+
+# --------------------------------------------------------------------------- #
+# Serialization helpers (dataframes <-> DataTable records)
+# --------------------------------------------------------------------------- #
+def df_to_records(df):
+    return df.to_dict("records")
+
+
+def records_to_df(records, cols):
+    df = pd.DataFrame(records or [])
+    for c in cols:
+        if c not in df.columns:
+            df[c] = pd.Series(dtype=object)
+    return df[cols]
+
+
+def _table(table_id, columns, data=None):
+    return dash_table.DataTable(
+        id=table_id,
+        columns=[{"name": c, "id": c} for c in columns],
+        data=data or [],
+        editable=True,
+        row_deletable=True,
+        page_size=100,
+        style_table={"overflowX": "auto", "maxHeight": "360px", "overflowY": "auto"},
+        style_cell={"fontFamily": "monospace", "fontSize": "13px",
+                    "textAlign": "left", "padding": "4px"},
+        style_header={"fontWeight": "bold"},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Layout
+# --------------------------------------------------------------------------- #
+app.layout = dbc.Container([
+    html.H3("KEGG workbook builder", className="mt-3"),
+    html.P("Assemble the Metabolites/Reactions workbook from KEGG, check its "
+           "balance, and download the .xlsx for the analysis app. No Java "
+           "needed — this app does not run efmtool.", className="text-muted"),
+
+    dbc.Card(dbc.CardBody([
+        html.H5("1 · Fetch from KEGG"),
+        html.P("Paste KEGG reaction ids (e.g. R00200, R01786) and/or module ids "
+               "(e.g. M00001 for EMP glycolysis), separated by spaces, commas or "
+               "new lines. Fetching appends to the tables below.",
+               className="text-muted small"),
+        dbc.Textarea(id="kegg-input", placeholder="R00200, R01786  M00001",
+                     style={"height": "70px", "fontFamily": "monospace"},
+                     className="mb-2"),
+        dbc.Button("⬇ Fetch from KEGG", id="btn-fetch", color="primary"),
+        dcc.Loading(html.Div(id="fetch-messages",
+                             style={"maxHeight": "160px", "overflowY": "auto",
+                                    "fontSize": "12px", "fontFamily": "monospace",
+                                    "marginTop": "0.5rem"})),
+    ]), className="mb-3"),
+
+    dbc.Row([
+        dbc.Col([
+            html.H5("Reactions"),
+            dbc.Button("+ Add reaction row", id="btn-add-rxn", size="sm",
+                       color="light", className="mb-1"),
+            _table("tbl-rxn", io.REACTION_COLS),
+        ], md=7),
+        dbc.Col([
+            html.H5("Metabolites"),
+            dbc.Button("+ Add metabolite row", id="btn-add-met", size="sm",
+                       color="light", className="mb-1"),
+            _table("tbl-met", io.METABOLITE_COLS),
+        ], md=5),
+    ], className="mb-3"),
+
+    html.Hr(),
+    html.H5("2 · Live balance check"),
+    html.P("KEGG reactions often omit H⁺/H₂O or aren't balanced as written. "
+           "Exchange reactions (EX…) are expected to be unbalanced and are not "
+           "flagged. Use the one-click fixes to patch a flagged reaction.",
+           className="text-muted small"),
+    dcc.Loading(html.Div(id="balance-panel")),
+    dbc.Card(dbc.CardBody([
+        html.H6("One-click fixes", className="mb-2"),
+        dbc.InputGroup([
+            dbc.InputGroupText("Reaction"),
+            dbc.Select(id="fix-reaction", options=[]),
+        ], className="mb-2"),
+        dbc.ButtonGroup([
+            dbc.Button("+ H⁺ left", id="fix-h-left", size="sm", outline=True, color="primary"),
+            dbc.Button("+ H⁺ right", id="fix-h-right", size="sm", outline=True, color="primary"),
+            dbc.Button("+ H₂O left", id="fix-w-left", size="sm", outline=True, color="info"),
+            dbc.Button("+ H₂O right", id="fix-w-right", size="sm", outline=True, color="info"),
+        ]),
+    ]), className="mb-3"),
+
+    html.Hr(),
+    html.H5("3 · Save / load"),
+    dbc.Row([
+        dbc.Col(dcc.Upload(
+            id="upload-xlsx",
+            children=html.Div(["⬆ Drag/drop or ", html.A("select an .xlsx")]),
+            style={"border": "1px dashed #aaa", "borderRadius": "6px",
+                   "padding": "10px", "textAlign": "center"}), md=6),
+        dbc.Col([
+            dbc.Input(id="wb-name", value="kegg_workbook", className="mb-2"),
+            dbc.Button("⬇ Download workbook (.xlsx)", id="btn-download",
+                       color="secondary", outline=True, className="w-100"),
+            dcc.Download(id="download-xlsx"),
+        ], md=6),
+    ], className="mb-4"),
+], fluid=True)
+
+
+# --------------------------------------------------------------------------- #
+# Callbacks
+# --------------------------------------------------------------------------- #
+@app.callback(
+    Output("tbl-met", "data"),
+    Output("tbl-rxn", "data"),
+    Output("fetch-messages", "children"),
+    Input("btn-fetch", "n_clicks"),
+    Input("upload-xlsx", "contents"),
+    Input("btn-add-rxn", "n_clicks"),
+    Input("btn-add-met", "n_clicks"),
+    State("kegg-input", "value"),
+    State("tbl-met", "data"),
+    State("tbl-rxn", "data"),
+    prevent_initial_call=True,
+)
+def update_tables(_nf, upload, _nar, _nam, kegg_text, met_data, rxn_data):
+    trig = ctx.triggered_id
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+
+    if trig == "btn-fetch":
+        ids = [t for t in _split_ids(kegg_text)]
+        if not ids:
+            return no_update, no_update, "Enter at least one KEGG id."
+        df_met, df_rxn, messages = kegg.fetch_reactions(
+            ids, existing_metabolites=df_met, existing_reactions=df_rxn)
+        msg = html.Ul([html.Li(m) for m in messages]) if messages else "Nothing fetched."
+        return df_to_records(df_met), df_to_records(df_rxn), msg
+
+    if trig == "upload-xlsx" and upload:
+        _header, b64 = upload.split(",", 1)
+        try:
+            df_met, df_rxn = io.load_excel(base64.b64decode(b64))
+        except Exception as e:
+            return no_update, no_update, f"⚠ Could not read workbook: {e}"
+        return (df_to_records(df_met), df_to_records(df_rxn),
+                "Workbook uploaded ✓")
+
+    if trig == "btn-add-rxn":
+        df_rxn = pd.concat([df_rxn, pd.DataFrame([{c: "" for c in io.REACTION_COLS}])],
+                           ignore_index=True)
+    elif trig == "btn-add-met":
+        df_met = pd.concat([df_met, pd.DataFrame([{c: "" for c in io.METABOLITE_COLS}])],
+                           ignore_index=True)
+    return df_to_records(df_met), df_to_records(df_rxn), no_update
+
+
+def _split_ids(text):
+    if not text:
+        return []
+    out = []
+    for tok in str(text).replace(",", " ").split():
+        tok = tok.strip()
+        if tok:
+            out.append(tok)
+    return out
+
+
+@app.callback(
+    Output("balance-panel", "children"),
+    Output("fix-reaction", "options"),
+    Input("tbl-met", "data"),
+    Input("tbl-rxn", "data"),
+)
+def update_balance(met_data, rxn_data):
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    if df_rxn.empty or df_rxn["ID"].dropna().empty:
+        return html.Div("No reactions yet — fetch some from KEGG above."), []
+
+    df_bal, ok, errors = run.run_balance(df_met, df_rxn)
+
+    def status_cell(row):
+        if row["atom_balanced"] is True and row["charge_balanced"] is True:
+            return "✓ balanced"
+        if row.get("is_exchange"):
+            return "exchange (unbalanced ok)"
+        if row["atom_balanced"] is None:
+            return f"⚠ {row['notes']}"
+        return f"✗ {row['atom_imbalance'] or row['notes']}"
+
+    disp = pd.DataFrame({
+        "Reaction": df_bal["reaction_id"],
+        "Status": df_bal.apply(status_cell, axis=1),
+        "KEGG equation": df_bal["equation_kegg"],
+    })
+    table = dash_table.DataTable(
+        data=disp.to_dict("records"),
+        columns=[{"name": c, "id": c} for c in disp.columns],
+        style_cell={"fontFamily": "monospace", "fontSize": "12px",
+                    "textAlign": "left", "padding": "4px"},
+        style_data_conditional=[
+            {"if": {"filter_query": '{Status} contains "✗"'},
+             "backgroundColor": "#f8d7da"},
+            {"if": {"filter_query": '{Status} contains "⚠"'},
+             "backgroundColor": "#fff3cd"},
+            {"if": {"filter_query": '{Status} contains "✓"'},
+             "backgroundColor": "#d4edda"},
+        ],
+        page_size=100,
+        style_table={"overflowX": "auto", "maxHeight": "360px", "overflowY": "auto"},
+    )
+    if ok:
+        banner = dbc.Alert("✓ All non-exchange reactions are atom- and "
+                           "charge-balanced — ready to download.", color="success")
+    else:
+        items = [html.Li(f"{e['reaction_id']}: {e['imbalance'] or e['notes']}")
+                 for e in errors]
+        banner = dbc.Alert([html.B(f"{len(errors)} imbalanced reaction(s):"),
+                            html.Ul(items)], color="danger")
+
+    flagged = [{"label": e["reaction_id"], "value": e["reaction_id"]} for e in errors]
+    return html.Div([banner, table]), flagged
+
+
+@app.callback(
+    Output("tbl-rxn", "data", allow_duplicate=True),
+    Input("fix-h-left", "n_clicks"),
+    Input("fix-h-right", "n_clicks"),
+    Input("fix-w-left", "n_clicks"),
+    Input("fix-w-right", "n_clicks"),
+    State("fix-reaction", "value"),
+    State("tbl-rxn", "data"),
+    State("tbl-met", "data"),
+    prevent_initial_call=True,
+)
+def apply_fix(_hl, _hr, _wl, _wr, rxn_id, rxn_data, met_data):
+    if not rxn_id:
+        return no_update
+    trig = ctx.triggered_id
+    # Resolve the working ID for H+ / H2O from the metabolite table (KEGG-keyed),
+    # preferring the intracellular form (IDs not ending in "ex").
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    kegg_to_id = {}
+    for _, r in df_met.iterrows():
+        k, mid = str(r["KEGG ID"]), str(r["ID"])
+        if k not in kegg_to_id or kegg_to_id[k].endswith("ex"):
+            kegg_to_id[k] = mid
+    species = (kegg_to_id.get("C00080", "H") if "h-" in trig
+               else kegg_to_id.get("C00001", "H2O"))
+    side = "left" if trig.endswith("left") else "right"
+
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    mask = df_rxn["ID"].astype(str) == str(rxn_id)
+    if not mask.any():
+        return no_update
+    idx = df_rxn.index[mask][0]
+    eq = str(df_rxn.loc[idx, "Reaction stoichiometry"])
+    eq_norm = eq
+    for arrow in ["<=>", "->", "=>", "→", "<->"]:
+        if arrow in eq:
+            lhs, rhs = eq.split(arrow, 1)
+            if side == "left":
+                lhs = f"{lhs.strip()} + {species}"
+            else:
+                rhs = f"{rhs.strip()} + {species}"
+            eq_norm = f"{lhs.strip()} {arrow} {rhs.strip()}"
+            break
+    df_rxn.loc[idx, "Reaction stoichiometry"] = eq_norm
+    return df_to_records(df_rxn)
+
+
+@app.callback(
+    Output("download-xlsx", "data"),
+    Input("btn-download", "n_clicks"),
+    State("tbl-met", "data"),
+    State("tbl-rxn", "data"),
+    State("wb-name", "value"),
+    prevent_initial_call=True,
+)
+def download_workbook(_n, met_data, rxn_data, name):
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    data = io.save_excel(df_met, df_rxn)
+    return dcc.send_bytes(data, f"{name or 'kegg_workbook'}.xlsx")
+
+
+if __name__ == "__main__":
+    app.run(debug=False, host="127.0.0.1", port=8051)

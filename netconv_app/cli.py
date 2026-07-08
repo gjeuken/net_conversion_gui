@@ -13,7 +13,7 @@ import sys
 
 import pandas as pd
 
-from .pipeline import efm, io, run
+from pipeline import efm, io, run
 
 pd.set_option("display.width", 160)
 pd.set_option("display.max_columns", 40)
@@ -113,7 +113,7 @@ def main(argv=None):
     else:
         print("(thermo skipped)")
         for col in res.df_normalized.columns:
-            from .pipeline.thermo import net_conversion_string
+            from pipeline.thermo import net_conversion_string
             print(f"  {col}: {net_conversion_string(col, res.df_normalized, dict(zip(df_met['ID'], df_met['ID'])))}")
 
     return 0

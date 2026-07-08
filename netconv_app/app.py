@@ -24,7 +24,7 @@ from dash import (Dash, DiskcacheManager, Input, Output, State, ctx, dash_table,
 
 import diskcache
 
-from .pipeline import efm, io, model as model_mod, run, thermo
+from pipeline import efm, io, model as model_mod, run, thermo
 
 # --------------------------------------------------------------------------- #
 # App + background-callback manager (DiskcacheManager for the long EFM step)

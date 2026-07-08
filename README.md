@@ -57,6 +57,18 @@ This route needs a **Java runtime installed separately** (see Requirements).
 Open <http://127.0.0.1:8050>. The app opens pre-loaded with the
 **EMP-glycolysis → lactate** example, so it is non-empty on first run.
 
+### The KEGG workbook builder
+
+A second, focused app assembles the Metabolites/Reactions workbook **from
+KEGG** (reaction ids or a whole module), checks its balance live, patches the
+usual KEGG H⁺/H₂O omissions, and downloads the `.xlsx` the analysis app
+consumes. It shares the same `pipeline/` core, needs **no Java** (no EFM step),
+and serves a separate port so it can run alongside the analysis app:
+
+```bash
+python -m kegg_builder_app.app      # http://127.0.0.1:8051
+```
+
 ### Requirements
 
 * **Python 3.11+**
@@ -254,21 +266,23 @@ routed to manual entry rather than guessed.
 ## Project layout
 
 ```
-netconv_app/
-  app.py                 # Dash app: layout + callbacks (serves 127.0.0.1:8050)
+pipeline/                # shared core, imported by both apps
+  io.py                  # canonical dataframes, Excel + config save/load
+  kegg.py                # KEGG REST: reaction + compound fetch (formula/charge/name)
+  balance.py             # formula/charge parsing, atom + charge balance
+  model.py               # COBRApy model, exchanges, FBA, pruning
+  efm.py                 # S matrix, efmtool, rank check, normalisation
+  thermo.py              # eQuilibrator ΔG, Ω measure
+  cache.py               # on-disk KEGG cache
+  run.py                 # stage orchestration (shared by app + CLI)
+netconv_app/             # analysis app  →  python -m netconv_app.app  (:8050)
+  app.py                 # Dash app: layout + callbacks
   cli.py                 # headless pipeline runner
-  pipeline/
-    io.py                # canonical dataframes, Excel + config save/load
-    kegg.py              # KEGG REST: reaction + compound fetch (formula/charge/name)
-    balance.py           # formula/charge parsing, atom + charge balance
-    model.py             # COBRApy model, exchanges, FBA, pruning
-    efm.py               # S matrix, efmtool, rank check, normalisation
-    thermo.py            # eQuilibrator ΔG, Ω measure
-    cache.py             # on-disk KEGG cache
-    run.py               # stage orchestration (shared by app + CLI)
   examples/              # example workbooks + their generator
   assets/style.css
   requirements.txt
+kegg_builder_app/        # KEGG→xlsx builder  →  python -m kegg_builder_app.app  (:8051)
+  app.py
 environment.yml          # conda env (bundles Java) — see Quick start, Option A
 CLAUDE.md                # the original build brief / specification
 educational_paper_pipeline.ipynb   # the reference notebook
