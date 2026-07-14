@@ -41,6 +41,8 @@ python -m netconv_app.app
 
 ### Option B — venv + system Java
 
+**macOS / Linux:**
+
 ```bash
 # 1. Create an environment and install the Python dependencies
 python -m venv ~/envs/catabolic
@@ -50,7 +52,30 @@ python -m venv ~/envs/catabolic
 ~/envs/catabolic/bin/python -m netconv_app.app
 ```
 
+**Windows** — `~` is not expanded (it would create a literal `~` folder), and
+the executables live in `Scripts\`, not `bin/`. Use `%USERPROFILE%` and call
+**`python -m pip`** rather than `pip` directly, so the environment's own
+interpreter does the install (this avoids the conflict you hit if an Anaconda
+`pip` is already on your `PATH`):
+
+```bat
+:: Command Prompt
+python -m venv %USERPROFILE%\envs\catabolic
+%USERPROFILE%\envs\catabolic\Scripts\python.exe -m pip install -r netconv_app\requirements.txt
+%USERPROFILE%\envs\catabolic\Scripts\python.exe -m netconv_app.app
+```
+
+(If you `cd` into the folder that *contains* the `envs` directory first, you can
+drop the `%USERPROFILE%\` prefix and just write `envs\catabolic\Scripts\...`.)
+
 This route needs a **Java runtime installed separately** (see Requirements).
+Prefer **Option A (conda)** on Windows — it bundles Java and sidesteps all of
+the path/`pip` differences above.
+
+> **Path conventions in the rest of this README.** Commands below are written in
+> the macOS/Linux form (`~/envs/catabolic/bin/...`). On Windows, substitute
+> `%USERPROFILE%` for `~` and `Scripts\` for `bin/` throughout — e.g.
+> `%USERPROFILE%\envs\catabolic\Scripts\python.exe`.
 
 ---
 
@@ -177,8 +202,9 @@ fixes** to patch a flagged reaction from either side.
 > the `EX` prefix to map an exchange back to its KEGG compound.
 
 **Run-time selectors** (substrates, products, carbon products, energy product,
-freely-reversible exchanges, and pseudo/currency metabolites) populate from the
-exchanges actually present. Currency metabolites (ATP, ADP, Pi, H₂O, H⁺) are
+freely-reversible exchanges, and currency / unbalanced metabolites) populate
+from the exchanges actually present. Currency metabolites (ATP, ADP, Pi, H₂O,
+H⁺) — those net-produced/-consumed alongside the main carbon conversion — are
 pre-suggested — but which metabolites are external, and reaction
 reversibility/direction, remain **your** modelling choices. The app never makes
 those scientific calls silently.

@@ -102,6 +102,14 @@ def workbench_tab():
     # render blank until a reflow — e.g. switching tabs — forces a redraw.)
     df_met0, df_rxn0, _cfg0 = load_example("Example1_EMP_lactate.xlsx")
     met0, rxn0 = df_to_records(df_met0), df_to_records(df_rxn0)
+    # Seed the selector options *and* values from the default example too, so the
+    # run-time selectors (incl. currency metabolites) are populated on first
+    # paint.  A Dropdown value set while its options are still empty gets dropped,
+    # which is why the currency metabolites showed up blank on load.
+    ex0 = [{"label": r, "value": r} for r in df_rxn0["ID"].dropna().astype(str)
+           if r.startswith("EX")]
+    metopt0 = [{"label": m, "value": m} for m in df_met0["ID"].dropna().astype(str)]
+    pseudo0 = sorted(_cfg0.get("PSEUDO_METS") or [])
     return dbc.Container([
         dbc.Row([
             dbc.Col([
@@ -153,7 +161,9 @@ def workbench_tab():
             html.H6("One-click fixes", className="mb-2"),
             dbc.InputGroup([
                 dbc.InputGroupText("Reaction"),
-                dbc.Select(id="fix-reaction", options=[]),
+                dbc.Col(dcc.Dropdown(id="fix-reaction", options=[],
+                                     placeholder="an imbalanced reaction…"),
+                        className="p-0"),
             ], className="mb-2"),
             dbc.ButtonGroup([
                 dbc.Button("+ H⁺ left", id="fix-h-left", size="sm", outline=True, color="primary"),
@@ -164,7 +174,7 @@ def workbench_tab():
         ]), className="mb-3"),
 
         html.Hr(),
-        html.H5("4 · Run-time selectors"),
+        html.H5("3 · Run-time selectors"),
         html.Div("Scientific choices (reversibility/direction, which metabolites "
                  "are external) stay with you — these are populated from the "
                  "exchanges present.", className="text-muted small mb-2"),
@@ -172,21 +182,30 @@ def workbench_tab():
             dbc.Col([dbc.Label("Model name"),
                      dbc.Input(id="cfg-model-name", value="model")], md=4),
             dbc.Col([dbc.Label("Substrate(s)"),
-                     dcc.Dropdown(id="cfg-substrates", multi=True)], md=4),
+                     dcc.Dropdown(id="cfg-substrates", multi=True, options=ex0,
+                                  value=_cfg0.get("SUBSTRATES", []))], md=4),
             dbc.Col([dbc.Label("Energy product (ΔG cycle check)"),
-                     dcc.Dropdown(id="cfg-energy")], md=4),
+                     dcc.Dropdown(id="cfg-energy", options=ex0,
+                                  value=_cfg0.get("ENERGY_PRODUCT"))], md=4),
         ], className="mb-2"),
         dbc.Row([
             dbc.Col([dbc.Label("Products (secretable)"),
-                     dcc.Dropdown(id="cfg-products", multi=True)], md=4),
+                     dcc.Dropdown(id="cfg-products", multi=True, options=ex0,
+                                  value=_cfg0.get("PRODUCTS", []))], md=4),
             dbc.Col([dbc.Label("Carbon products (yield check)"),
-                     dcc.Dropdown(id="cfg-carbon", multi=True)], md=4),
+                     dcc.Dropdown(id="cfg-carbon", multi=True, options=ex0,
+                                  value=_cfg0.get("CARBON_PRODUCTS", []))], md=4),
             dbc.Col([dbc.Label("Freely-reversible exchanges"),
-                     dcc.Dropdown(id="cfg-rev", multi=True)], md=4),
+                     dcc.Dropdown(id="cfg-rev", multi=True, options=ex0,
+                                  value=_cfg0.get("REV_ALLOWED", []))], md=4),
         ], className="mb-2"),
         dbc.Row([
-            dbc.Col([dbc.Label("Pseudo (currency) metabolites — excluded from Ω flux sum"),
-                     dcc.Dropdown(id="cfg-pseudo", multi=True)], md=12),
+            dbc.Col([dbc.Label("Currency / unbalanced metabolites — excluded from Ω flux sum"),
+                     html.Div("Metabolites net-produced/-consumed alongside the "
+                              "main carbon conversion (ATP, ADP, Pi, H₂O, H⁺, …).",
+                              className="text-muted small mb-1"),
+                     dcc.Dropdown(id="cfg-pseudo", multi=True, options=metopt0,
+                                  value=pseudo0)], md=12),
         ], className="mb-3"),
     ], fluid=True)
 
@@ -374,6 +393,7 @@ def sync_reactions(data):
 @app.callback(
     Output("balance-panel", "children"),
     Output("fix-reaction", "options"),
+    Output("fix-reaction", "value"),
     Output("cfg-substrates", "options"),
     Output("cfg-products", "options"),
     Output("cfg-carbon", "options"),
@@ -382,12 +402,13 @@ def sync_reactions(data):
     Output("cfg-pseudo", "options"),
     Input("store-metabolites", "data"),
     Input("store-reactions", "data"),
+    State("fix-reaction", "value"),
 )
-def update_balance(met_data, rxn_data):
+def update_balance(met_data, rxn_data, fix_value):
     df_met = records_to_df(met_data, io.METABOLITE_COLS)
     df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
     if df_rxn.empty:
-        return (html.Div("No reactions yet."), [], [], [], [], [], [], [])
+        return (html.Div("No reactions yet."), [], None, [], [], [], [], [], [])
 
     df_bal, ok, errors = run.run_balance(df_met, df_rxn)
 
@@ -437,7 +458,14 @@ def update_balance(met_data, rxn_data):
     met_opts = [{"label": m, "value": m} for m in met_ids]
     flagged = [{"label": e["reaction_id"], "value": e["reaction_id"]} for e in errors]
 
-    return (html.Div([banner, table]), flagged,
+    # Keep the current pick if it's still imbalanced; otherwise advance to the
+    # first remaining flagged reaction (so the fix buttons always act on a real,
+    # currently-selected reaction — never a stale one).
+    flagged_ids = [e["reaction_id"] for e in errors]
+    fix_val = fix_value if fix_value in flagged_ids else (
+        flagged_ids[0] if flagged_ids else None)
+
+    return (html.Div([banner, table]), flagged, fix_val,
             ex_opts, ex_opts, ex_opts, ex_opts, ex_opts, met_opts)
 
 
@@ -458,17 +486,22 @@ def update_balance(met_data, rxn_data):
 def default_selectors(_n, upload, example_file, met_data):
     trig = ctx.triggered_id
     cfg = {}
+    # Read the metabolite table from the SAME source we're loading the config
+    # from — not from the store, which lags a paint behind on first load and
+    # would leave the currency-metabolite suggestion empty.
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
     if trig == "upload-excel" and upload:
         try:
             _h, b64 = upload.split(",", 1)
-            cfg = io.load_config(base64.b64decode(b64)) or {}
+            data = base64.b64decode(b64)
+            cfg = io.load_config(data) or {}
+            df_met, _r = io.load_excel(data)
         except Exception:
             cfg = {}
     else:
-        _m, _r, cfg = load_example(example_file or "Example1_EMP_lactate.xlsx")
+        df_met, _r, cfg = load_example(example_file or "Example1_EMP_lactate.xlsx")
 
     # Suggest currency pseudo-mets present in the table.
-    df_met = records_to_df(met_data, io.METABOLITE_COLS)
     suggested_pseudo = cfg.get("PSEUDO_METS")
     if not suggested_pseudo and not df_met.empty:
         suggested_pseudo = sorted({
@@ -891,7 +924,7 @@ def run_thermo(_n, efm_store, met_data, rxn_data, which):
             html.H6("Per-EFM breakdown", className="mt-4"),
             html.P("Net conversions produced by more than one EFM: each EFM "
                    "shares the same net-conversion ΔG but has its own flux sum, "
-                   "so Ω differs per EFM.",
+                   "so Ω can differ per EFM.",
                    className="text-muted small"),
             *details,
         ]) if details else None),

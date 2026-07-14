@@ -213,7 +213,9 @@ app.layout = dbc.Container([
         html.H6("One-click fixes", className="mb-2"),
         dbc.InputGroup([
             dbc.InputGroupText("Reaction"),
-            dbc.Select(id="fix-reaction", options=[]),
+            dbc.Col(dcc.Dropdown(id="fix-reaction", options=[],
+                                 placeholder="an imbalanced reaction…"),
+                    className="p-0"),
         ], className="mb-2"),
         dbc.ButtonGroup([
             dbc.Button("+ H⁺ left", id="fix-h-left", size="sm", outline=True, color="primary"),
@@ -569,14 +571,16 @@ def add_exchanges(_n, selected, met_data, rxn_data):
 @app.callback(
     Output("balance-panel", "children"),
     Output("fix-reaction", "options"),
+    Output("fix-reaction", "value"),
     Input("tbl-met", "data"),
     Input("tbl-rxn", "data"),
+    State("fix-reaction", "value"),
 )
-def update_balance(met_data, rxn_data):
+def update_balance(met_data, rxn_data, fix_value):
     df_met = records_to_df(met_data, io.METABOLITE_COLS)
     df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
     if df_rxn.empty or df_rxn["ID"].dropna().empty:
-        return html.Div("No reactions yet — fetch some from KEGG above."), []
+        return html.Div("No reactions yet — fetch some from KEGG above."), [], None
 
     df_bal, ok, errors = run.run_balance(df_met, df_rxn)
 
@@ -621,7 +625,13 @@ def update_balance(met_data, rxn_data):
                             html.Ul(items)], color="danger")
 
     flagged = [{"label": e["reaction_id"], "value": e["reaction_id"]} for e in errors]
-    return html.Div([banner, table]), flagged
+    # Keep the current pick if it's still imbalanced; otherwise advance to the
+    # first remaining flagged reaction, so the fix buttons never act on a stale
+    # selection.
+    flagged_ids = [e["reaction_id"] for e in errors]
+    fix_val = fix_value if fix_value in flagged_ids else (
+        flagged_ids[0] if flagged_ids else None)
+    return html.Div([banner, table]), flagged, fix_val
 
 
 @app.callback(

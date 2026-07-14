@@ -51,6 +51,17 @@ python -m venv ~/envs/catabolic        # or use your own env
 ~/envs/catabolic/bin/pip install -r netconv_app/requirements.txt
 ```
 
+On **Windows**, `~` is not expanded and executables live under `Scripts\`, so
+use `%USERPROFILE%` and the environment's own interpreter for pip:
+
+```bat
+python -m venv %USERPROFILE%\envs\catabolic
+%USERPROFILE%\envs\catabolic\Scripts\python.exe -m pip install -r netconv_app\requirements.txt
+```
+
+(Substitute `%USERPROFILE%` for `~` and `Scripts\` for `bin/` in the run
+commands below as well. On Windows, prefer the conda route above.)
+
 ## Run
 
 From the **project root** (the directory containing `netconv_app/`):
@@ -83,7 +94,7 @@ The page is a five-tab stepper:
    colours rows green / yellow / red. Exchange reactions (`EX…`) are expected to
    be unbalanced and are not flagged. Use the **one-click H⁺/H₂O fixes** to
    patch a flagged reaction. The **run-time selectors** (substrates, products,
-   energy product, reversible exchanges, pseudo/currency metabolites) populate
+   energy product, reversible exchanges, currency / unbalanced metabolites) populate
    from the exchanges present — these are *your* modelling choices, never silent
    defaults.
 
