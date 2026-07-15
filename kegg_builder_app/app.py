@@ -22,6 +22,7 @@ from dash import (Dash, Input, Output, State, ctx, dash_table, dcc, html,
                   no_update)
 
 from pipeline import balance, bigg, exchanges, idmap, io, kegg, run
+from pipeline import model as model_mod
 
 app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY],
            title="KEGG workbook builder")
@@ -200,6 +201,21 @@ app.layout = dbc.Container([
         html.Div(id="exchange-messages",
                  style={"fontSize": "12px", "fontFamily": "monospace",
                         "marginTop": "0.5rem"}),
+    ]), className="mb-3"),
+
+    dbc.Card(dbc.CardBody([
+        html.H5("1e · Network connectivity check"),
+        html.P("Build a model straight from the tables above (every reaction "
+               "reversible except those marked irreversible — no substrate/"
+               "product/energy-product choices yet, those come later in the "
+               "analysis app) and find reactions that can never carry any "
+               "flux at steady state. Run this after adding exchange/"
+               "transport reactions: a blocked exchange usually means a "
+               "missing transport or connecting reaction for that boundary "
+               "metabolite.", className="text-muted small"),
+        dbc.Button("Check for blocked reactions", id="btn-connectivity",
+                   color="secondary", outline=True),
+        dcc.Loading(html.Div(id="connectivity-output", className="mt-2")),
     ]), className="mb-3"),
 
     html.Hr(),
@@ -567,6 +583,52 @@ def add_exchanges(_n, selected, met_data, rxn_data):
     m2, r2, messages = exchanges.add_exchange_transport(df_met, df_rxn, selected)
     msg = html.Ul([html.Li(m) for m in messages]) if messages else "Nothing added."
     return df_to_records(m2), df_to_records(r2), msg
+
+
+@app.callback(
+    Output("connectivity-output", "children"),
+    Input("btn-connectivity", "n_clicks"),
+    State("tbl-met", "data"),
+    State("tbl-rxn", "data"),
+    prevent_initial_call=True,
+)
+def check_connectivity(_n, met_data, rxn_data):
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    if df_rxn.empty or df_rxn["ID"].dropna().empty:
+        return dbc.Alert("No reactions yet — fetch some from KEGG above.",
+                         color="warning")
+    try:
+        blocked = model_mod.find_blocked_reactions(df_met, df_rxn,
+                                                    "connectivity_check")
+    except Exception as e:
+        return dbc.Alert(f"⚠ Could not build the model: {e}", color="danger")
+
+    if not blocked:
+        return dbc.Alert(
+            "✓ Every reaction can carry flux — no dead ends given the "
+            "reactions and exchanges added so far.", color="success")
+
+    blocked_ex = sorted(r for r in blocked if str(r).startswith("EX"))
+    blocked_other = sorted(r for r in blocked if not str(r).startswith("EX"))
+    parts = [html.B(f"{len(blocked)} reaction(s) can never carry flux "
+                    f"(default bounds — no substrate/product/energy-product "
+                    f"choices applied yet):")]
+    if blocked_ex:
+        parts.append(html.Div([
+            "Blocked exchanges — usually a missing transport reaction, or "
+            "this boundary metabolite isn't reachable from anything else "
+            "in the network yet: ",
+            html.Code(", ".join(blocked_ex)),
+        ], className="mt-1"))
+    if blocked_other:
+        parts.append(html.Div([
+            "Other blocked reactions — check that each of their metabolites "
+            "is both produced and consumed somewhere (a missing exchange "
+            "for a byproduct is a common cause): ",
+            html.Code(", ".join(blocked_other)),
+        ], className="mt-1"))
+    return dbc.Alert(parts, color="warning")
 
 
 @app.callback(

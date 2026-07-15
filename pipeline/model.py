@@ -129,3 +129,18 @@ def prune_blocked(model):
     for rid in blocked:
         model.remove_reactions([model.reactions.get_by_id(rid)])
     return blocked
+
+
+def find_blocked_reactions(df_metabolites, df_reactions, model_name="model"):
+    """Ids of reactions that can never carry flux, with default bounds only.
+
+    Builds a model straight from the two canonical dataframes — every
+    reaction reversible except those marked ``Reversibility == 0`` — with no
+    substrate/product/energy-product configuration (those run-time selectors
+    are set later, in the analysis app). A dead end found here is usually a
+    missing exchange, transport, or connecting reaction: useful right after
+    adding exchange/transport reactions, before the network ever reaches FBA.
+    """
+    model, _irrev = build_model(df_metabolites, df_reactions, model_name)
+    sanitize_model(model)
+    return cobra.flux_analysis.find_blocked_reactions(model)
