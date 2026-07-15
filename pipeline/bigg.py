@@ -131,6 +131,7 @@ def translate_to_bigg(df_metabolites, df_reactions, mapping=None):
 
     id_map, report = {}, []
     used = set()
+    kegg_of_target: dict[str, str | None] = {}  # target id -> the KEGG id that claimed it
     for _, row in df_met.iterrows():
         old = str(row.get("ID", "")).strip()
         kegg = str(row.get("KEGG ID", "")).strip()
@@ -148,14 +149,24 @@ def translate_to_bigg(df_metabolites, df_reactions, mapping=None):
             new = old
             status = "kegg-fallback"
 
-        # Keep ids unique: if the chosen id collides with one already assigned,
-        # suffix it and flag the row.
-        base, n = new, 2
-        while new in used and new != old:
-            new = f"{base}_{n}"
-            n += 1
-            status = "collision"
+        if new in used and new != old:
+            owner_kegg = kegg_of_target.get(new)
+            if kegg_valid and owner_kegg == kegg:
+                # Same KEGG compound already claimed this id — e.g. a reaction
+                # added after an earlier BiGG conversion, still referencing
+                # the raw KEGG id. Merge into the existing metabolite instead
+                # of minting a "_2" near-duplicate; apply_id_map collapses
+                # the now-identical rows.
+                status = "merged"
+            else:
+                # Genuine clash between two different compounds: suffix it.
+                base, n = new, 2
+                while new in used:
+                    new = f"{base}_{n}"
+                    n += 1
+                status = "collision"
         used.add(new)
+        kegg_of_target.setdefault(new, kegg if kegg_valid else None)
         if new != old:
             id_map[old] = new
         report.append({"old": old, "new": new, "kegg": kegg, "status": status})

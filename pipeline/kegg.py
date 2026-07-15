@@ -20,6 +20,7 @@ import requests
 
 from . import cache
 from .balance import has_nonnumeric_coefficient, normalize_arrow, parse_equation
+from .idmap import rewrite_equation
 
 KEGG_BASE = "http://rest.kegg.jp/get/"
 TIMEOUT = 20
@@ -183,6 +184,17 @@ def fetch_reactions(ids, existing_metabolites=None, existing_reactions=None):
     known_met = set(df_met["ID"].dropna().astype(str))
     known_rxn = set(df_rxn["ID"].dropna().astype(str))
 
+    # A KEGG compound may already be present under a different working id (most
+    # commonly after a BiGG-id translation, e.g. C00003 -> nad). Newly fetched
+    # reactions must reuse that working id rather than re-adding the compound
+    # under its raw KEGG id, or the same metabolite ends up duplicated.
+    kegg_to_working: dict[str, str] = {}
+    for _, r in df_met.iterrows():
+        kid = str(r.get("KEGG ID", "")).strip()
+        wid = str(r.get("ID", "")).strip()
+        if kid and wid and kid not in kegg_to_working:
+            kegg_to_working[kid] = wid
+
     # Expand any module ids into their reaction lists.
     expanded: list[str] = []
     for raw in ids:
@@ -201,12 +213,23 @@ def fetch_reactions(ids, existing_metabolites=None, existing_reactions=None):
 
     new_met_rows, new_rxn_rows = [], []
 
-    def ensure_metabolite(cid):
+    def working_id(cid):
+        """Resolve a KEGG compound id to its working id in the table.
+
+        Reuses an already-known working id for this KEGG compound (whatever it
+        currently is — raw KEGG id or a translated BiGG id); only adds a new
+        metabolite row when the compound is genuinely new.
+        """
+        existing = kegg_to_working.get(cid)
+        if existing:
+            return existing
         if cid in known_met:
-            return
+            return cid
         name = get_compound_name(cid) or cid
         new_met_rows.append({"ID": cid, "Name": name, "KEGG ID": cid})
         known_met.add(cid)
+        kegg_to_working[cid] = cid
+        return cid
 
     for rid in expanded:
         if rid in known_rxn:
@@ -230,15 +253,22 @@ def fetch_reactions(ids, existing_metabolites=None, existing_reactions=None):
             messages.append(f"⚠ {rid}: could not parse equation ({e})")
             continue
 
+        token_map = {}
         for _coeff, cid in subs + prods:
-            ensure_metabolite(cid)
+            wid = working_id(cid)
+            if wid != cid:
+                token_map[cid] = wid
+
+        eq_norm = normalize_arrow(equation)
+        if token_map:
+            eq_norm = rewrite_equation(eq_norm, token_map)
 
         # KEGG writes everything reversible; reversibility/direction is a
         # user decision (CLAUDE.md §5) — default to reversible (1).
         new_rxn_rows.append({
             "ID": rid,
             "Name": name or rid,
-            "Reaction stoichiometry": normalize_arrow(equation),
+            "Reaction stoichiometry": eq_norm,
             "Reversibility": 1,
         })
         known_rxn.add(rid)

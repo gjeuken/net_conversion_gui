@@ -307,6 +307,7 @@ _BIGG_STATUS_LABEL = {
     "name-fallback": "no BiGG id — used slugified KEGG name",
     "kegg-fallback": "no KEGG id — left unchanged",
     "collision": "id clashed — suffixed to keep it unique",
+    "merged": "duplicate of an existing metabolite — merged",
 }
 
 
