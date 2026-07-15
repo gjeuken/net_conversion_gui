@@ -279,13 +279,16 @@ def fetch_reactions(ids, existing_metabolites=None, existing_reactions=None):
         if token_map:
             eq_norm = rewrite_equation(eq_norm, token_map)
 
-        # KEGG writes everything reversible; reversibility/direction is a
-        # user decision (CLAUDE.md §5) — default to reversible (1).
+        # KEGG writes everything reversible, but reversibility/direction is a
+        # user decision (CLAUDE.md §5) — default to irreversible (0) so every
+        # reaction needs an explicit, deliberate opt-in to be reversible
+        # (via the workbench's "Reaction reversibility" picker) rather than
+        # silently inheriting KEGG's arbitrary <=> notation.
         new_rxn_rows.append({
             "ID": rid,
             "Name": name or rid,
             "Reaction stoichiometry": eq_norm,
-            "Reversibility": 1,
+            "Reversibility": 0,
             "KEGG Reaction ID": rid,
         })
         known_rxn.add(rid)

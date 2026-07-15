@@ -73,9 +73,10 @@ def load_excel(source):
 
     df_met = clean_dataframe_whitespace(_coerce(df_met, METABOLITE_COLS))
     df_rxn = clean_dataframe_whitespace(_coerce(df_rxn, REACTION_COLS))
-    # Reversibility defaults to reversible if blank.
+    # Reversibility defaults to irreversible if blank — reversibility is a
+    # deliberate modelling choice (CLAUDE.md §5), never a silent default.
     df_rxn["Reversibility"] = (
-        pd.to_numeric(df_rxn["Reversibility"], errors="coerce").fillna(1).astype(int)
+        pd.to_numeric(df_rxn["Reversibility"], errors="coerce").fillna(0).astype(int)
     )
     return df_met, df_rxn
 

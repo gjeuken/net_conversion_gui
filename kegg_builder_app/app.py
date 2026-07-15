@@ -98,9 +98,9 @@ app.layout = dbc.Container([
             dbc.Col(dbc.Input(id="man-name", placeholder="Name (optional)"), md=3),
             dbc.Col(dbc.Input(id="man-eq",
                               placeholder="e.g. GLC + PEP -> G6P + PYR"), md=4),
-            dbc.Col(dbc.Select(id="man-rev", value="1",
-                               options=[{"label": "reversible", "value": "1"},
-                                        {"label": "irreversible", "value": "0"}]),
+            dbc.Col(dbc.Select(id="man-rev", value="0",
+                               options=[{"label": "irreversible", "value": "0"},
+                                        {"label": "reversible", "value": "1"}]),
                     md=1),
             dbc.Col(dbc.Button("Add", id="btn-add-manual", color="primary"), md=1),
         ], className="g-2"),
@@ -242,6 +242,26 @@ app.layout = dbc.Container([
                        color="secondary", outline=True, size="sm"),
         ]),
         html.Div(id="remove-messages",
+                 style={"fontSize": "12px", "marginTop": "0.5rem"}),
+    ]), className="mb-3"),
+
+    dbc.Card(dbc.CardBody([
+        html.H5("Reaction reversibility"),
+        html.P("New reactions default to irreversible — reversibility is a "
+               "deliberate modelling choice (CLAUDE.md §5), never a silent "
+               "default. Pick the reactions that are actually reversible and "
+               "mark them here; check the Reversibility column in the "
+               "Reactions table above to see the current state.",
+               className="text-muted small"),
+        dcc.Dropdown(id="reversible-rxns", multi=True, className="mb-2",
+                     placeholder="Reactions to mark…"),
+        dbc.ButtonGroup([
+            dbc.Button("Mark selected reversible", id="btn-mark-reversible",
+                       color="primary", outline=True, size="sm"),
+            dbc.Button("Mark selected irreversible", id="btn-mark-irreversible",
+                       color="secondary", outline=True, size="sm"),
+        ]),
+        html.Div(id="reversibility-messages",
                  style={"fontSize": "12px", "marginTop": "0.5rem"}),
     ]), className="mb-3"),
 
@@ -473,7 +493,7 @@ def add_manual_reaction(_n, rid, name, eq, rev, met_data, rxn_data):
     df_rxn = pd.concat([df_rxn, pd.DataFrame([{
         "ID": rid, "Name": (name or "").strip() or rid,
         "Reaction stoichiometry": balance.normalize_arrow(eq),
-        "Reversibility": int(rev) if rev in ("0", "1") else 1,
+        "Reversibility": int(rev) if rev in ("0", "1") else 0,
     }])], ignore_index=True)
 
     known = {str(x).strip() for x in df_met["ID"].dropna()}
@@ -682,6 +702,39 @@ def prune_metabolites(_n, met_data, rxn_data):
     return (df_to_records(df_met[mask_keep]),
             dbc.Alert(f"Removed {len(removed)} unused metabolite(s): "
                       f"{', '.join(removed)}.", color="success"))
+
+
+@app.callback(
+    Output("reversible-rxns", "options"),
+    Input("tbl-rxn", "data"),
+)
+def update_reversible_options(rxn_data):
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    return [{"label": r, "value": r}
+            for r in df_rxn["ID"].dropna().astype(str) if r.strip()]
+
+
+@app.callback(
+    Output("tbl-rxn", "data", allow_duplicate=True),
+    Output("reversibility-messages", "children"),
+    Input("btn-mark-reversible", "n_clicks"),
+    Input("btn-mark-irreversible", "n_clicks"),
+    State("reversible-rxns", "value"),
+    State("tbl-rxn", "data"),
+    prevent_initial_call=True,
+)
+def mark_reversibility(_n_rev, _n_irrev, selected, rxn_data):
+    if not selected:
+        return no_update, "Select at least one reaction first."
+    trig = ctx.triggered_id
+    new_value = 1 if trig == "btn-mark-reversible" else 0
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    mask = df_rxn["ID"].astype(str).isin(set(selected))
+    df_rxn.loc[mask, "Reversibility"] = new_value
+    label = "reversible" if new_value else "irreversible"
+    return (df_to_records(df_rxn),
+            dbc.Alert(f"Marked {mask.sum()} reaction(s) {label}: "
+                      f"{', '.join(sorted(selected))}.", color="success"))
 
 
 @app.callback(
