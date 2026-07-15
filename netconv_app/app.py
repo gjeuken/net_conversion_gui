@@ -177,25 +177,51 @@ def workbench_tab():
         html.H5("3 · Run-time selectors"),
         html.Div("Scientific choices (reversibility/direction, which metabolites "
                  "are external) stay with you — these are populated from the "
-                 "exchanges present.", className="text-muted small mb-2"),
+                 "exchanges present. Every exchange you want to keep must appear "
+                 "in Substrates, Products, or Freely-reversible below — any "
+                 "exchange in none of the three is deleted from the model.",
+                 className="text-muted small mb-2"),
         dbc.Row([
             dbc.Col([dbc.Label("Model name"),
                      dbc.Input(id="cfg-model-name", value="model")], md=4),
             dbc.Col([dbc.Label("Substrate(s)"),
+                     html.Div("Exchanges with uptake enabled — your carbon "
+                              "source(s); put the primary one first, since only "
+                              "the first entry sets EFM normalisation and the "
+                              "yield basis, and all of them are blocked together "
+                              "in the energy-cycle check.",
+                              className="text-muted small mb-1"),
                      dcc.Dropdown(id="cfg-substrates", multi=True, options=ex0,
                                   value=_cfg0.get("SUBSTRATES", []))], md=4),
             dbc.Col([dbc.Label("Energy product (ΔG cycle check)"),
+                     html.Div("The exchange (usually ATP) maximised with all "
+                              "substrate uptake blocked, to catch "
+                              "energy-generating cycles — not a co-substrate.",
+                              className="text-muted small mb-1"),
                      dcc.Dropdown(id="cfg-energy", options=ex0,
                                   value=_cfg0.get("ENERGY_PRODUCT"))], md=4),
         ], className="mb-2"),
         dbc.Row([
             dbc.Col([dbc.Label("Products (secretable)"),
+                     html.Div("Exchanges with uptake blocked but secretion "
+                              "allowed — your pathway's outputs (e.g. lactate, "
+                              "CO₂, any net-produced ATP/ADP/Pi).",
+                              className="text-muted small mb-1"),
                      dcc.Dropdown(id="cfg-products", multi=True, options=ex0,
                                   value=_cfg0.get("PRODUCTS", []))], md=4),
             dbc.Col([dbc.Label("Carbon products (yield check)"),
+                     html.Div("A subset of Products: the carbon-containing end "
+                              "product(s) to report max theoretical FBA yield "
+                              "for — not currency carriers like ATP/ADP/Pi.",
+                              className="text-muted small mb-1"),
                      dcc.Dropdown(id="cfg-carbon", multi=True, options=ex0,
                                   value=_cfg0.get("CARBON_PRODUCTS", []))], md=4),
             dbc.Col([dbc.Label("Freely-reversible exchanges"),
+                     html.Div("Exchanges kept reversible (uptake and secretion "
+                              "both allowed) — cofactor/currency exchanges "
+                              "(ADP, Pi, H₂O, H⁺, …) whose net direction isn't "
+                              "fixed a priori; the EFMs decide the sign.",
+                              className="text-muted small mb-1"),
                      dcc.Dropdown(id="cfg-rev", multi=True, options=ex0,
                                   value=_cfg0.get("REV_ALLOWED", []))], md=4),
         ], className="mb-2"),
