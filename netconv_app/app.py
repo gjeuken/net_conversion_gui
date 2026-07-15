@@ -751,14 +751,33 @@ def run_fba(_n, met_data, rxn_data, name, subs, prods, carbon, energy, rev, pseu
     # --- Check 3: network connectivity (blocked reactions) ------------------
     blocked = checks["blocked_reactions"]
     removed = checks["removed_exchanges"]
+
+    # A blocked reaction is fatal (not merely a prunable dead end) if it is one
+    # of the run-time selectors from the Workbench — substrate uptake, product
+    # formation, or the energy product: if any of these can never carry flux,
+    # that metabolite is silently absent from every EFM (or, for the substrate/
+    # energy product, later stages error out entirely).
+    fatal_ids = ({cfg["ENERGY_PRODUCT"]} | set(cfg["SUBSTRATES"])
+                 | set(cfg["PRODUCTS"]) | set(cfg["CARBON_PRODUCTS"]))
+    fatal_ids.discard(None)
+    fatal_blocked = [b for b in blocked if b in fatal_ids]
+
     if blocked:
-        status3 = "warn"
-        imp3 = html.Span(
-            "These are inactive as the network stands — usually a missing "
-            "connecting reaction or exchange. If you expected one to carry "
-            "flux, check that each of its metabolites is both produced and "
-            "consumed somewhere. They are pruned automatically, so the EFM "
-            "step is unaffected.", className="text-warning")
+        status3 = "fail" if fatal_blocked else "warn"
+        if fatal_blocked:
+            imp3 = html.Span(
+                f"Fatal: {', '.join(fatal_blocked)} — configured in the "
+                f"Workbench as a substrate, product, or energy product, but "
+                f"blocked (cannot carry any flux). Do not enumerate EFMs until "
+                f"this is fixed — add the missing connecting reaction(s), or "
+                f"reconsider the selector.", className="text-danger fw-bold")
+        else:
+            imp3 = html.Span(
+                "These are inactive as the network stands — usually a missing "
+                "connecting reaction or exchange. If you expected one to carry "
+                "flux, check that each of its metabolites is both produced and "
+                "consumed somewhere. They are pruned automatically, so the EFM "
+                "step is unaffected.", className="text-warning")
         blocked_result = html.Div([
             html.Span([html.B(f"{len(blocked)}"), " reaction(s) pruned: "]),
             html.Code(", ".join(blocked)),
@@ -776,7 +795,15 @@ def run_fba(_n, met_data, rxn_data, name, subs, prods, carbon, energy, rev, pseu
         imp3)
 
     # --- Overall banner + boundary note -------------------------------------
-    if not atp_ok:
+    if fatal_blocked:
+        banner = dbc.Alert(
+            html.Span([
+                "Do not enumerate EFMs: ", html.B(", ".join(fatal_blocked)),
+                " — a configured substrate/product/energy-product exchange — "
+                "is blocked and cannot carry flux. Fix this in the Workbench "
+                "first (see the connectivity check below).",
+            ]), color="danger")
+    elif not atp_ok:
         banner = dbc.Alert("A problem was found that would corrupt the EFM "
                            "results — fix it in the Workbench before continuing.",
                            color="danger")
