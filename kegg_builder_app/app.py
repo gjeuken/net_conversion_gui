@@ -110,12 +110,30 @@ app.layout = dbc.Container([
 
     dbc.Card(dbc.CardBody([
         html.H5("1b · Human-readable ids (optional)"),
-        html.P("Translate KEGG compound ids to BiGG ids (e.g. C00031 → glc__D). "
-               "The KEGG ID column is kept, so balance and thermodynamics still "
-               "resolve compounds correctly. Compounds with no clean BiGG id "
-               "fall back to a slugified KEGG name and are flagged for you to "
-               "hand-edit. First use downloads a small BiGG file (needs network).",
+        html.P("Translate KEGG compound ids to BiGG ids (e.g. C00031 → glc__D) "
+               "and KEGG reaction ids to BiGG reaction ids (e.g. R00200 → PYK). "
+               "The KEGG ID / KEGG Reaction ID columns are kept, so balance and "
+               "thermodynamics still resolve everything correctly. Anything "
+               "with no clean BiGG id falls back to a slugified KEGG name and "
+               "is flagged for you to hand-edit. First use downloads two small "
+               "BiGG files (needs network).",
                className="text-muted small"),
+        dbc.Checklist(
+            id="chk-use-mnx",
+            options=[{
+                "label": ("Also try MetaNetX cross-references for ids BiGG "
+                          "doesn't have — finds many more matches (BiGG's own "
+                          "files link a KEGG id for only ~10% of its "
+                          "reactions), but is a large one-time download "
+                          "(~700MB compounds + ~80MB reactions) and can take "
+                          "several minutes on first use. Already have "
+                          "chem_xref.tsv / reac_xref.tsv from metanetx.org? "
+                          "Drop them in .cache/ (next to the pipeline "
+                          "package) to skip the download entirely."),
+                "value": "mnx",
+            }],
+            value=[], switch=True, className="small text-muted mb-2",
+        ),
         dbc.Button("Translate KEGG → BiGG ids", id="btn-bigg",
                    color="secondary", outline=True),
         dcc.Loading(html.Div(id="bigg-messages",
@@ -129,7 +147,9 @@ app.layout = dbc.Container([
                "current metabolites, edit the New ID column, then Apply — the "
                "reaction stoichiometries and EX/transport ids are rewritten to "
                "match, and the KEGG ID column is kept. Do this before adding "
-               "exchanges so those pick up your ids.", className="text-muted small"),
+               "exchanges so those pick up your ids. Press Enter after editing "
+               "a cell to save it — clicking away without Enter does not save.",
+               className="text-muted small"),
         dbc.Button("Load current metabolites", id="btn-load-rename",
                    color="secondary", outline=True, size="sm", className="mb-2"),
         dash_table.DataTable(
@@ -152,17 +172,58 @@ app.layout = dbc.Container([
                  style={"fontSize": "12px", "marginTop": "0.5rem"}),
     ]), className="mb-3"),
 
+    dbc.Card(dbc.CardBody([
+        html.H5("1d · Custom reaction ids (optional)"),
+        html.P("Same idea for reactions — handy after KEGG gives you bare "
+               "Rxxxxx ids. Click Load to fill the table from the current "
+               "reactions, edit the New ID column, then Apply. Reaction ids "
+               "aren't referenced anywhere else in the tables (only "
+               "metabolite ids are, inside stoichiometries), so this never "
+               "touches your equations. Press Enter after editing a cell to "
+               "save it — clicking away without Enter does not save.",
+               className="text-muted small"),
+        dbc.Button("Load current reactions", id="btn-load-rxn-rename",
+                   color="secondary", outline=True, size="sm", className="mb-2"),
+        dash_table.DataTable(
+            id="tbl-rxn-rename",
+            columns=[{"name": "KEGG Reaction ID", "id": "KEGG Reaction ID",
+                     "editable": False},
+                     {"name": "Current ID", "id": "Current ID", "editable": False},
+                     {"name": "Stoichiometry", "id": "Stoichiometry",
+                     "editable": False},
+                     {"name": "New ID", "id": "New ID", "editable": True}],
+            data=[], editable=True, page_size=100,
+            style_table={"overflowX": "auto", "maxHeight": "300px",
+                         "overflowY": "auto"},
+            style_cell={"fontFamily": "monospace", "fontSize": "12px",
+                        "textAlign": "left", "padding": "4px"},
+            style_header={"fontWeight": "bold"},
+            style_data_conditional=[
+                {"if": {"column_id": "New ID"}, "backgroundColor": "#f0f7ff"}],
+        ),
+        dbc.Button("Apply custom reaction ids", id="btn-apply-rxn-rename",
+                   color="primary", className="mt-2 w-100"),
+        html.Div(id="rxn-rename-messages",
+                 style={"fontSize": "12px", "marginTop": "0.5rem"}),
+    ]), className="mb-3"),
+
     dbc.Row([
         dbc.Col([
             html.H5("Reactions"),
             dbc.Button("+ Add reaction row", id="btn-add-rxn", size="sm",
                        color="light", className="mb-1"),
+            html.Div("Press Enter after editing a cell to save it — clicking "
+                     "away without Enter does not save.",
+                     className="text-muted small mb-1"),
             _table("tbl-rxn", io.REACTION_COLS),
         ], md=7),
         dbc.Col([
             html.H5("Metabolites"),
             dbc.Button("+ Add metabolite row", id="btn-add-met", size="sm",
                        color="light", className="mb-1"),
+            html.Div("Press Enter after editing a cell to save it — clicking "
+                     "away without Enter does not save.",
+                     className="text-muted small mb-1"),
             _table("tbl-met", io.METABOLITE_COLS),
         ], md=5),
     ], className="mb-3"),
@@ -185,7 +246,7 @@ app.layout = dbc.Container([
     ]), className="mb-3"),
 
     dbc.Card(dbc.CardBody([
-        html.H5("1d · Exchange & transport reactions"),
+        html.H5("1e · Exchange & transport reactions"),
         html.P("Pick the metabolites that cross the system boundary. For each, "
                "the app adds an extracellular counterpart, a transport reaction "
                "(X ⇌ Xex) and an exchange reaction (EXX). Direction stays a "
@@ -202,7 +263,7 @@ app.layout = dbc.Container([
     ]), className="mb-3"),
 
     dbc.Card(dbc.CardBody([
-        html.H5("1e · Network connectivity check"),
+        html.H5("1f · Network connectivity check"),
         html.P("Build a model straight from the tables above (every reaction "
                "reversible except those marked irreversible — no substrate/"
                "product/energy-product choices yet, those come later in the "
@@ -332,32 +393,52 @@ _BIGG_STATUS_LABEL = {
     Input("btn-bigg", "n_clicks"),
     State("tbl-met", "data"),
     State("tbl-rxn", "data"),
+    State("chk-use-mnx", "value"),
     prevent_initial_call=True,
 )
-def translate_bigg(_n, met_data, rxn_data):
+def translate_bigg(_n, met_data, rxn_data, use_mnx_value):
     df_met = records_to_df(met_data, io.METABOLITE_COLS)
     df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
     if df_met.empty or df_met["ID"].dropna().empty:
         return no_update, no_update, "Fetch some reactions first."
+    use_mnx = bool(use_mnx_value)
     try:
-        m2, r2, report = bigg.translate_to_bigg(df_met, df_rxn)
+        m2, r2, met_report = bigg.translate_to_bigg(df_met, df_rxn, use_mnx=use_mnx)
+        r2, rxn_report = bigg.translate_reactions_to_bigg(r2, use_mnx=use_mnx)
     except bigg.BiggError as e:
         return no_update, no_update, dbc.Alert(
             f"⚠ {e} — needs network on first use.", color="warning")
 
-    n = len(report)
-    clean = sum(1 for x in report if x["status"] == "bigg")
-    flags = [x for x in report if x["status"] != "bigg"]
-    summary = dbc.Alert(
-        f"Translated {clean}/{n} metabolites to clean BiGG ids"
-        + (f"; {len(flags)} need a look." if flags else "."),
-        color="success" if not flags else "info")
-    detail = html.Ul([
-        html.Li([html.Code(f"{x['kegg'] or x['old']} → {x['new']}"),
-                 f"  ({_BIGG_STATUS_LABEL.get(x['status'], x['status'])})"])
-        for x in flags]) if flags else None
+    def _summary_bits(report, label):
+        n = len(report)
+        clean = sum(1 for x in report if x["status"] == "bigg")
+        flags = [x for x in report if x["status"] != "bigg"]
+        text = f"{label}: {clean}/{n} clean BiGG ids"
+        if flags:
+            text += f" ({len(flags)} need a look)"
+        return text, flags
+
+    met_text, met_flags = _summary_bits(met_report, "Metabolites")
+    rxn_text, rxn_flags = _summary_bits(rxn_report, "Reactions")
+    summary = dbc.Alert(f"{met_text}. {rxn_text}.",
+                        color="success" if not (met_flags or rxn_flags) else "info")
+
+    def _detail(flags, label):
+        if not flags:
+            return None
+        return html.Div([
+            html.B(label),
+            html.Ul([
+                html.Li([html.Code(f"{x['kegg'] or x['old']} → {x['new']}"),
+                         f"  ({_BIGG_STATUS_LABEL.get(x['status'], x['status'])})"])
+                for x in flags]),
+        ])
+
+    detail_children = [d for d in
+                       [_detail(met_flags, "Metabolites:"), _detail(rxn_flags, "Reactions:")]
+                       if d]
     return (df_to_records(m2), df_to_records(r2),
-            html.Div([summary, detail] if detail else [summary]))
+            html.Div([summary] + detail_children))
 
 
 @app.callback(
@@ -470,6 +551,65 @@ def apply_custom_ids(_n, rename_rows, met_data, rxn_data):
     changes = ", ".join(f"{k}→{v}" for k, v in id_map.items())
     return (df_to_records(m2), df_to_records(r2),
             dbc.Alert(f"Renamed {len(id_map)} metabolite(s): {changes}",
+                      color="success"))
+
+
+@app.callback(
+    Output("tbl-rxn-rename", "data"),
+    Input("btn-load-rxn-rename", "n_clicks"),
+    State("tbl-rxn", "data"),
+    prevent_initial_call=True,
+)
+def populate_rxn_rename(_n, rxn_data):
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    rows = []
+    for _, r in df_rxn.iterrows():
+        rid = str(r.get("ID", "")).strip()
+        if not rid:
+            continue
+        rows.append({"KEGG Reaction ID": r.get("KEGG Reaction ID"),
+                     "Current ID": rid,
+                     "Stoichiometry": r.get("Reaction stoichiometry"),
+                     "New ID": rid})
+    return rows
+
+
+@app.callback(
+    Output("tbl-rxn", "data", allow_duplicate=True),
+    Output("rxn-rename-messages", "children"),
+    Input("btn-apply-rxn-rename", "n_clicks"),
+    State("tbl-rxn-rename", "data"),
+    State("tbl-rxn", "data"),
+    prevent_initial_call=True,
+)
+def apply_rxn_custom_ids(_n, rename_rows, rxn_data):
+    if not rename_rows:
+        return no_update, "Click 'Load current reactions' first."
+    id_map = {}
+    for row in rename_rows:
+        cur = str(row.get("Current ID", "")).strip()
+        new = str(row.get("New ID", "")).strip()
+        if cur and new and new != cur:
+            id_map[cur] = new
+    if not id_map:
+        return no_update, "No id changes to apply."
+
+    # Validate: the resulting ids must stay unique (no two reactions collide).
+    # Unlike metabolites, reaction ids aren't referenced anywhere else in the
+    # tables, so this is a plain rename — no equation rewriting needed.
+    df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
+    current_ids = [str(x).strip() for x in df_rxn["ID"].dropna()]
+    resulting = [id_map.get(i, i) for i in current_ids]
+    dupes = sorted({x for x in resulting if resulting.count(x) > 1})
+    if dupes:
+        return no_update, dbc.Alert(
+            f"⚠ These ids would collide — pick distinct New IDs: "
+            f"{', '.join(dupes)}", color="danger")
+
+    df_rxn["ID"] = df_rxn["ID"].map(lambda x: id_map.get(str(x).strip(), x))
+    changes = ", ".join(f"{k}→{v}" for k, v in id_map.items())
+    return (df_to_records(df_rxn),
+            dbc.Alert(f"Renamed {len(id_map)} reaction(s): {changes}",
                       color="success"))
 
 

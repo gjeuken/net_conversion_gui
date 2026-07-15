@@ -4,11 +4,15 @@ The two canonical dataframes (CLAUDE.md §5) are the single source of truth:
 
 * **Metabolites** — columns ``ID``, ``Name``, ``KEGG ID``, ``Chemical formula``
 * **Reactions**   — columns ``ID``, ``Name``, ``Reaction stoichiometry``,
-  ``Reversibility`` (1 = reversible, 0 = irreversible)
+  ``Reversibility`` (1 = reversible, 0 = irreversible), ``KEGG Reaction ID``
 
 ``Chemical formula`` is optional and used only for metabolites that have no
 KEGG ID (the balance check can't look those up); when present it's used
-directly, overriding any KEGG lookup.
+directly, overriding any KEGG lookup. ``KEGG Reaction ID`` is likewise
+optional — it's blank for manually-added/non-KEGG reactions, and otherwise
+tracks the originating KEGG reaction id once the working ``ID`` has been
+translated to something more readable (a BiGG id or a custom id), the same
+way ``KEGG ID`` tracks it for metabolites.
 """
 
 from __future__ import annotations
@@ -18,7 +22,8 @@ import io as _io
 import pandas as pd
 
 METABOLITE_COLS = ["ID", "Name", "KEGG ID", "Chemical formula"]
-REACTION_COLS = ["ID", "Name", "Reaction stoichiometry", "Reversibility"]
+REACTION_COLS = ["ID", "Name", "Reaction stoichiometry", "Reversibility",
+                 "KEGG Reaction ID"]
 
 # Run-time selectors (the notebook's USER INPUTS cell).  Stored in an optional
 # "Config" sheet so an example workbook carries its own modelling choices.

@@ -167,7 +167,8 @@ def fetch_reactions(ids, existing_metabolites=None, existing_reactions=None):
     balance loop.
     """
     met_cols = ["ID", "Name", "KEGG ID"]
-    rxn_cols = ["ID", "Name", "Reaction stoichiometry", "Reversibility"]
+    rxn_cols = ["ID", "Name", "Reaction stoichiometry", "Reversibility",
+                "KEGG Reaction ID"]
 
     df_met = (existing_metabolites.copy() if existing_metabolites is not None
               else pd.DataFrame(columns=met_cols))
@@ -194,6 +195,17 @@ def fetch_reactions(ids, existing_metabolites=None, existing_reactions=None):
         wid = str(r.get("ID", "")).strip()
         if kid and wid and kid not in kegg_to_working:
             kegg_to_working[kid] = wid
+
+    # Same idea for reactions: a reaction already translated to a BiGG id
+    # (e.g. R00200 -> PYK) must not be re-fetched under its raw KEGG id.
+    kegg_rxn_to_working: dict[str, str] = {}
+    for _, r in df_rxn.iterrows():
+        kid = str(r.get("KEGG Reaction ID", "") or "").strip()
+        wid = str(r.get("ID", "")).strip()
+        if not kid and re.fullmatch(r"R\d{5}", wid):
+            kid = wid  # not yet translated: the working id is still the KEGG id
+        if kid and wid and kid not in kegg_rxn_to_working:
+            kegg_rxn_to_working[kid] = wid
 
     # Expand any module ids into their reaction lists.
     expanded: list[str] = []
@@ -235,6 +247,10 @@ def fetch_reactions(ids, existing_metabolites=None, existing_reactions=None):
         if rid in known_rxn:
             messages.append(f"• {rid} already present — skipped")
             continue
+        existing_wid = kegg_rxn_to_working.get(rid)
+        if existing_wid and existing_wid != rid:
+            messages.append(f"• {rid} already present as {existing_wid} — skipped")
+            continue
         try:
             name, equation = get_reaction_entry(rid)
         except KeggError as e:
@@ -270,8 +286,10 @@ def fetch_reactions(ids, existing_metabolites=None, existing_reactions=None):
             "Name": name or rid,
             "Reaction stoichiometry": eq_norm,
             "Reversibility": 1,
+            "KEGG Reaction ID": rid,
         })
         known_rxn.add(rid)
+        kegg_rxn_to_working[rid] = rid
         messages.append(f"✓ {rid} added")
 
     if new_met_rows:
