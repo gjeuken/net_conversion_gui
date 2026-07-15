@@ -130,12 +130,8 @@ app.layout = dbc.Container([
                "reaction stoichiometries and EX/transport ids are rewritten to "
                "match, and the KEGG ID column is kept. Do this before adding "
                "exchanges so those pick up your ids.", className="text-muted small"),
-        dbc.ButtonGroup([
-            dbc.Button("Load current metabolites", id="btn-load-rename",
-                       color="secondary", outline=True, size="sm"),
-            dbc.Button("Apply custom ids", id="btn-apply-rename",
-                       color="secondary", size="sm"),
-        ], className="mb-2"),
+        dbc.Button("Load current metabolites", id="btn-load-rename",
+                   color="secondary", outline=True, size="sm", className="mb-2"),
         dash_table.DataTable(
             id="tbl-rename",
             columns=[{"name": "KEGG ID", "id": "KEGG ID", "editable": False},
@@ -150,6 +146,8 @@ app.layout = dbc.Container([
             style_data_conditional=[
                 {"if": {"column_id": "New ID"}, "backgroundColor": "#f0f7ff"}],
         ),
+        dbc.Button("Apply custom ids", id="btn-apply-rename",
+                   color="primary", className="mt-2 w-100"),
         html.Div(id="rename-messages",
                  style={"fontSize": "12px", "marginTop": "0.5rem"}),
     ]), className="mb-3"),
