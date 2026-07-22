@@ -18,10 +18,10 @@ import base64
 
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import (Dash, Input, Output, State, ctx, dash_table, dcc, html,
-                  no_update)
+from dash import (ALL, MATCH, Dash, Input, Output, State, ctx, dash_table, dcc,
+                  html, no_update)
 
-from pipeline import balance, bigg, exchanges, idmap, io, kegg, run
+from pipeline import bigg, exchanges, idmap, io, kegg, run
 from pipeline import model as model_mod
 
 app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY],
@@ -60,6 +60,106 @@ def _table(table_id, columns, data=None):
 
 
 # --------------------------------------------------------------------------- #
+# Manual reaction entry: dynamic substrate/product rows (dcc components, not
+# DataTable cells — the DataTable's cell editor swallows Backspace/Delete/
+# Home/arrow keys for its own cell-to-cell navigation, so composing a new
+# reaction character-by-character in a table cell is effectively unfixable
+# without replacing the editor). Each row gets a stable, unique pattern-
+# matching id ({"type": ..., "side": "subs"/"prods", "index": n}) so Dash can
+# address an arbitrary number of rows without per-row callbacks.
+# --------------------------------------------------------------------------- #
+def _met_options(search_value, known_ids):
+    """Dropdown options for a metabolite picker: existing ids filtered by
+    ``search_value`` (substring match), plus a synthetic "new metabolite"
+    entry when the typed text doesn't match an existing id (case-insensitive)
+    — picking it uses the typed text itself as a brand-new working id."""
+    known_ids = sorted(set(known_ids))
+    known_lower = {i.lower() for i in known_ids}
+    q = (search_value or "").strip()
+    if not q:
+        return [{"label": i, "value": i} for i in known_ids]
+    matches = [i for i in known_ids if q.lower() in i.lower()]
+    opts = [{"label": i, "value": i} for i in matches]
+    if q.lower() not in known_lower:
+        opts.insert(0, {"label": f"＋ New metabolite: {q}", "value": q})
+    return opts
+
+
+def _metab_row(side, idx, known_ids):
+    return html.Div([
+        dbc.Row([
+            dbc.Col(dbc.Input(id={"type": "man-coeff", "side": side, "index": idx},
+                              type="number", value=1, min=0, step="any", size="sm"),
+                    width=3),
+            dbc.Col(dcc.Dropdown(id={"type": "man-met", "side": side, "index": idx},
+                                 options=_met_options(None, known_ids),
+                                 placeholder="metabolite…", clearable=False,
+                                 style={"fontSize": "13px"}),
+                    width=7),
+            dbc.Col(dbc.Button("×", id={"type": "man-rm", "side": side, "index": idx},
+                               size="sm", color="danger", outline=True,
+                               style={"padding": "0 8px"}),
+                    width=2),
+        ], className="g-1 mb-1"),
+    ], id={"type": "man-row", "side": side, "index": idx})
+
+
+def _new_met_panel(new_met_ids):
+    """A follow-up mini-form for freshly-created placeholder metabolites: a
+    KEGG id / chemical formula field per metabolite, so balance can resolve
+    them right away instead of only via the Metabolites table below."""
+    if not new_met_ids:
+        return None
+    rows = [
+        dbc.Row([
+            dbc.Col(html.Code(mid), width=3, className="pt-2"),
+            dbc.Col(dbc.Input(id={"type": "new-met-kegg", "mid": mid},
+                              placeholder="KEGG id (e.g. C00002)", size="sm"),
+                    width=4),
+            dbc.Col(dbc.Input(id={"type": "new-met-formula", "mid": mid},
+                              placeholder="Chemical formula (e.g. C6H12O6)", size="sm"),
+                    width=5),
+        ], className="g-2 mb-1")
+        for mid in new_met_ids
+    ]
+    return dbc.Card(dbc.CardBody([
+        html.Div("New metabolite(s) — add a KEGG id or chemical formula so "
+                 "they can balance (either is enough; both is fine too):",
+                 className="small fw-bold mb-2"),
+        *rows,
+        dbc.Button("Save metabolite details", id="btn-save-new-mets",
+                   size="sm", color="primary", className="mt-1"),
+    ]), color="info", outline=True, className="mt-2")
+
+
+def _next_row_index(children):
+    if not children:
+        return 0
+    idxs = [c["props"]["id"]["index"] for c in children]
+    return max(idxs) + 1
+
+
+def _side_terms(coeffs, mets):
+    terms = []
+    for c, m in zip(coeffs or [], mets or []):
+        if not m:
+            continue
+        try:
+            c = float(c) if c not in (None, "") else 1.0
+        except (TypeError, ValueError):
+            c = 1.0
+        terms.append((c, str(m).strip()))
+    return terms
+
+
+def _terms_to_str(terms):
+    parts = []
+    for c, m in terms:
+        parts.append(m if abs(c - 1.0) < 1e-9 else f"{c:g} {m}")
+    return " + ".join(parts) if parts else "0"
+
+
+# --------------------------------------------------------------------------- #
 # Layout
 # --------------------------------------------------------------------------- #
 app.layout = dbc.Container([
@@ -85,31 +185,7 @@ app.layout = dbc.Container([
     ]), className="mb-3"),
 
     dbc.Card(dbc.CardBody([
-        html.H5("1a · Add a reaction manually (non-KEGG)"),
-        html.P("For transport, PTS import, ion translocation or designed "
-               "reactions KEGG has no entry for. Write the stoichiometry in "
-               "working ids with any arrow (-> or <=>). Any metabolite not yet "
-               "in the table is added as a placeholder for you to complete "
-               "(KEGG id and/or chemical formula, so it can balance).",
-               className="text-muted small"),
-        dbc.Row([
-            dbc.Col(dbc.Input(id="man-id", placeholder="Reaction id (e.g. PTS_GLC)"),
-                    md=3),
-            dbc.Col(dbc.Input(id="man-name", placeholder="Name (optional)"), md=3),
-            dbc.Col(dbc.Input(id="man-eq",
-                              placeholder="e.g. GLC + PEP -> G6P + PYR"), md=4),
-            dbc.Col(dbc.Select(id="man-rev", value="0",
-                               options=[{"label": "irreversible", "value": "0"},
-                                        {"label": "reversible", "value": "1"}]),
-                    md=1),
-            dbc.Col(dbc.Button("Add", id="btn-add-manual", color="primary"), md=1),
-        ], className="g-2"),
-        html.Div(id="manual-messages",
-                 style={"fontSize": "12px", "marginTop": "0.5rem"}),
-    ]), className="mb-3"),
-
-    dbc.Card(dbc.CardBody([
-        html.H5("1b · Human-readable ids (optional)"),
+        html.H5("1a · Human-readable ids (optional)"),
         html.P("Translate KEGG compound ids to BiGG ids (e.g. C00031 → glc__D) "
                "and KEGG reaction ids to BiGG reaction ids (e.g. R00200 → PYK). "
                "The KEGG ID / KEGG Reaction ID columns are kept, so balance and "
@@ -142,7 +218,7 @@ app.layout = dbc.Container([
     ]), className="mb-3"),
 
     dbc.Card(dbc.CardBody([
-        html.H5("1c · Custom metabolite ids (optional)"),
+        html.H5("1b · Custom metabolite ids (optional)"),
         html.P("Set your own working ids. Click Load to fill the table from the "
                "current metabolites, edit the New ID column, then Apply — the "
                "reaction stoichiometries and EX/transport ids are rewritten to "
@@ -173,7 +249,7 @@ app.layout = dbc.Container([
     ]), className="mb-3"),
 
     dbc.Card(dbc.CardBody([
-        html.H5("1d · Custom reaction ids (optional)"),
+        html.H5("1c · Custom reaction ids (optional)"),
         html.P("Same idea for reactions — handy after KEGG gives you bare "
                "Rxxxxx ids. Click Load to fill the table from the current "
                "reactions, edit the New ID column, then Apply. Reaction ids "
@@ -207,6 +283,45 @@ app.layout = dbc.Container([
                  style={"fontSize": "12px", "marginTop": "0.5rem"}),
     ]), className="mb-3"),
 
+    dbc.Card(dbc.CardBody([
+        html.H5("1d · Add a reaction manually (non-KEGG)"),
+        html.P("For transport, PTS import, ion translocation or designed "
+               "reactions KEGG has no entry for. Pick substrates and products "
+               "from existing metabolites, or type a working id that doesn't "
+               "exist yet and choose \"＋ New metabolite: …\" to create it as "
+               "a placeholder (fill in its KEGG id or chemical formula "
+               "afterwards so it can balance). Add rows for extra "
+               "reactants/products as needed.",
+               className="text-muted small"),
+        dbc.Row([
+            dbc.Col(dbc.Input(id="man-rxn-id", placeholder="Reaction id (e.g. PTS_GLC)"), md=3),
+            dbc.Col(dbc.Input(id="man-rxn-name", placeholder="Name (optional)"), md=3),
+            dbc.Col(dbc.Select(id="man-rxn-rev", value="0",
+                               options=[{"label": "irreversible", "value": "0"},
+                                        {"label": "reversible", "value": "1"}]),
+                    md=2),
+            dbc.Col(dbc.Button("Add reaction", id="btn-add-manual-rxn",
+                               color="primary", className="w-100"), md=4),
+        ], className="g-2 mb-2"),
+        dbc.Row([
+            dbc.Col([
+                html.Div("Substrates", className="fw-bold small mb-1"),
+                html.Div(id="man-subs-rows", children=[_metab_row("subs", 0, [])]),
+                dbc.Button("+ Add metabolite", id="btn-man-add-subs", size="sm",
+                           color="light"),
+            ], md=6),
+            dbc.Col([
+                html.Div("Products", className="fw-bold small mb-1"),
+                html.Div(id="man-prods-rows", children=[_metab_row("prods", 0, [])]),
+                dbc.Button("+ Add metabolite", id="btn-man-add-prods", size="sm",
+                           color="light"),
+            ], md=6),
+        ], className="mb-2"),
+        html.Div(id="manual-messages",
+                 style={"fontSize": "12px", "marginTop": "0.5rem"}),
+        html.Div(id="man-new-met-panel"),
+    ]), className="mb-3"),
+
     dbc.Row([
         dbc.Col([
             html.H5("Reactions"),
@@ -219,6 +334,7 @@ app.layout = dbc.Container([
         ], md=7),
         dbc.Col([
             html.H5("Metabolites"),
+            html.Div(id="met-missing-warning"),
             dbc.Button("+ Add metabolite row", id="btn-add-met", size="sm",
                        color="light", className="mb-1"),
             html.Div("Press Enter after editing a cell to save it — clicking "
@@ -462,58 +578,199 @@ def translate_bigg(_n, met_data, rxn_data, use_mnx_value):
 
 
 @app.callback(
+    Output("man-subs-rows", "children"),
+    Input("btn-man-add-subs", "n_clicks"),
+    State("man-subs-rows", "children"),
+    State("tbl-met", "data"),
+    prevent_initial_call=True,
+)
+def add_subs_row(_n, children, met_data):
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    known_ids = df_met["ID"].dropna().astype(str).tolist()
+    children = children or []
+    return children + [_metab_row("subs", _next_row_index(children), known_ids)]
+
+
+@app.callback(
+    Output("man-prods-rows", "children"),
+    Input("btn-man-add-prods", "n_clicks"),
+    State("man-prods-rows", "children"),
+    State("tbl-met", "data"),
+    prevent_initial_call=True,
+)
+def add_prods_row(_n, children, met_data):
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    known_ids = df_met["ID"].dropna().astype(str).tolist()
+    children = children or []
+    return children + [_metab_row("prods", _next_row_index(children), known_ids)]
+
+
+@app.callback(
+    Output("man-subs-rows", "children", allow_duplicate=True),
+    Input({"type": "man-rm", "side": "subs", "index": ALL}, "n_clicks"),
+    State("man-subs-rows", "children"),
+    prevent_initial_call=True,
+)
+def remove_subs_row(_clicks, children):
+    if not children or len(children) <= 1 or not any(_clicks):
+        return no_update
+    trig = ctx.triggered_id
+    return [c for c in children if c["props"]["id"]["index"] != trig["index"]]
+
+
+@app.callback(
+    Output("man-prods-rows", "children", allow_duplicate=True),
+    Input({"type": "man-rm", "side": "prods", "index": ALL}, "n_clicks"),
+    State("man-prods-rows", "children"),
+    prevent_initial_call=True,
+)
+def remove_prods_row(_clicks, children):
+    if not children or len(children) <= 1 or not any(_clicks):
+        return no_update
+    trig = ctx.triggered_id
+    return [c for c in children if c["props"]["id"]["index"] != trig["index"]]
+
+
+@app.callback(
+    Output({"type": "man-met", "side": MATCH, "index": MATCH}, "options"),
+    Input({"type": "man-met", "side": MATCH, "index": MATCH}, "search_value"),
+    Input({"type": "man-met", "side": MATCH, "index": MATCH}, "value"),
+    State("tbl-met", "data"),
+)
+def update_man_met_options(search_value, current_value, met_data):
+    # Re-runs both when the user types (search_value) and right after they
+    # pick something (value) — a freshly-picked "new metabolite" doesn't
+    # exist in tbl-met yet (it's only created on submit), so without this
+    # the very next options refresh (e.g. the search box closing) would drop
+    # it from the list and the dropdown would lose its selection silently.
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    known_ids = df_met["ID"].dropna().astype(str).tolist()
+    opts = _met_options(search_value, known_ids)
+    if (current_value and current_value not in known_ids
+            and not any(o["value"] == current_value for o in opts)):
+        opts.append({"label": f"＋ New metabolite: {current_value}",
+                     "value": current_value})
+    return opts
+
+
+@app.callback(
     Output("tbl-met", "data", allow_duplicate=True),
     Output("tbl-rxn", "data", allow_duplicate=True),
+    Output("man-rxn-id", "value"),
+    Output("man-rxn-name", "value"),
+    Output("man-subs-rows", "children", allow_duplicate=True),
+    Output("man-prods-rows", "children", allow_duplicate=True),
     Output("manual-messages", "children"),
-    Input("btn-add-manual", "n_clicks"),
-    State("man-id", "value"),
-    State("man-name", "value"),
-    State("man-eq", "value"),
-    State("man-rev", "value"),
+    Output("man-new-met-panel", "children"),
+    Input("btn-add-manual-rxn", "n_clicks"),
+    State("man-rxn-id", "value"),
+    State("man-rxn-name", "value"),
+    State("man-rxn-rev", "value"),
+    State({"type": "man-coeff", "side": "subs", "index": ALL}, "value"),
+    State({"type": "man-met", "side": "subs", "index": ALL}, "value"),
+    State({"type": "man-coeff", "side": "prods", "index": ALL}, "value"),
+    State({"type": "man-met", "side": "prods", "index": ALL}, "value"),
     State("tbl-met", "data"),
     State("tbl-rxn", "data"),
     prevent_initial_call=True,
 )
-def add_manual_reaction(_n, rid, name, eq, rev, met_data, rxn_data):
+def add_manual_reaction(_n, rid, name, rev, subs_c, subs_m, prods_c, prods_m,
+                        met_data, rxn_data):
     rid = (rid or "").strip()
-    eq = (eq or "").strip()
-    if not rid or not eq:
-        return no_update, no_update, "Enter a reaction id and stoichiometry."
+    if not rid:
+        return (no_update,) * 6 + (dbc.Alert("Enter a reaction id.", color="warning"),
+                                    no_update)
+
     df_met = records_to_df(met_data, io.METABOLITE_COLS)
     df_rxn = records_to_df(rxn_data, io.REACTION_COLS)
     if (df_rxn["ID"].astype(str).str.strip() == rid).any():
-        return no_update, no_update, dbc.Alert(
-            f"⚠ Reaction '{rid}' already exists.", color="warning")
-    try:
-        subs, prods = balance.parse_equation(eq)
-    except Exception as e:
-        return no_update, no_update, dbc.Alert(
-            f"⚠ Could not parse the stoichiometry: {e}", color="danger")
+        return (no_update,) * 6 + (dbc.Alert(f"⚠ Reaction '{rid}' already exists.",
+                                              color="warning"),
+                                    no_update)
 
+    subs_terms = _side_terms(subs_c, subs_m)
+    prods_terms = _side_terms(prods_c, prods_m)
+    if not subs_terms or not prods_terms:
+        return (no_update,) * 6 + (dbc.Alert("Pick at least one substrate and one "
+                                              "product.", color="warning"),
+                                    no_update)
+
+    eq = f"{_terms_to_str(subs_terms)} <=> {_terms_to_str(prods_terms)}"
     df_rxn = pd.concat([df_rxn, pd.DataFrame([{
         "ID": rid, "Name": (name or "").strip() or rid,
-        "Reaction stoichiometry": balance.normalize_arrow(eq),
+        "Reaction stoichiometry": eq,
         "Reversibility": int(rev) if rev in ("0", "1") else 0,
     }])], ignore_index=True)
 
     known = {str(x).strip() for x in df_met["ID"].dropna()}
     new_mets = []
-    for _c, cid in subs + prods:
-        cid = str(cid).strip()
-        if cid and cid not in known:
-            new_mets.append({"ID": cid, "Name": cid, "KEGG ID": "",
+    for _c, mid in subs_terms + prods_terms:
+        if mid and mid not in known:
+            new_mets.append({"ID": mid, "Name": mid, "KEGG ID": "",
                              "Chemical formula": ""})
-            known.add(cid)
+            known.add(mid)
     if new_mets:
         df_met = pd.concat([df_met, pd.DataFrame(new_mets)], ignore_index=True)
 
-    parts = [f"✓ Added reaction {rid}"]
+    parts = [f"✓ Added reaction {rid}: {eq}"]
     if new_mets:
         parts.append("new metabolite placeholder(s): "
                      + ", ".join(m["ID"] for m in new_mets)
-                     + " — add a KEGG id or chemical formula so they balance.")
+                     + " — fill in a KEGG id or chemical formula below so "
+                       "they balance.")
+
+    fresh_known = df_met["ID"].dropna().astype(str).tolist()
     return (df_to_records(df_met), df_to_records(df_rxn),
-            dbc.Alert(" — ".join(parts), color="success"))
+            "", "",
+            [_metab_row("subs", 0, fresh_known)],
+            [_metab_row("prods", 0, fresh_known)],
+            dbc.Alert(" — ".join(parts), color="success"),
+            _new_met_panel([m["ID"] for m in new_mets]))
+
+
+@app.callback(
+    Output("tbl-met", "data", allow_duplicate=True),
+    Output("man-new-met-panel", "children", allow_duplicate=True),
+    Input("btn-save-new-mets", "n_clicks"),
+    State({"type": "new-met-kegg", "mid": ALL}, "value"),
+    State({"type": "new-met-kegg", "mid": ALL}, "id"),
+    State({"type": "new-met-formula", "mid": ALL}, "value"),
+    State("tbl-met", "data"),
+    prevent_initial_call=True,
+)
+def save_new_met_details(_n, kegg_vals, kegg_ids, formula_vals, met_data):
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    for id_dict, kegg_val, formula_val in zip(kegg_ids, kegg_vals, formula_vals):
+        mid = id_dict["mid"]
+        mask = df_met["ID"].astype(str) == mid
+        if kegg_val and kegg_val.strip():
+            df_met.loc[mask, "KEGG ID"] = kegg_val.strip()
+        if formula_val and formula_val.strip():
+            df_met.loc[mask, "Chemical formula"] = formula_val.strip()
+    return df_to_records(df_met), None
+
+
+def _is_blank(v):
+    return v is None or (isinstance(v, float) and pd.isna(v)) or str(v).strip() == ""
+
+
+@app.callback(
+    Output("met-missing-warning", "children"),
+    Input("tbl-met", "data"),
+)
+def check_missing_met_info(met_data):
+    df_met = records_to_df(met_data, io.METABOLITE_COLS)
+    df_met = df_met[df_met["ID"].astype(str).str.strip() != ""]
+    missing = [str(r["ID"]) for _, r in df_met.iterrows()
+              if _is_blank(r.get("KEGG ID")) and _is_blank(r.get("Chemical formula"))]
+    if not missing:
+        return None
+    return dbc.Alert([
+        html.B(f"{len(missing)} metabolite(s) "),
+        "have neither a KEGG id nor a chemical formula — balance can't be "
+        "checked for these: ",
+        html.Code(", ".join(missing)),
+    ], color="warning", className="small py-2 mb-1")
 
 
 @app.callback(
